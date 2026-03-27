@@ -1,24 +1,29 @@
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from '@/lib/supabase';
-import { User } from '@/types/db';
+import { supabase } from '../../lib/supabase';
 
 export const useCurrentUser = () => {
-  return useQuery<User | null>({
-    queryKey: ['current-user'],
+  return useQuery({
+    queryKey: ['currentUser'],
     queryFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
       
-      if (!user) return null;
+      if (authError || !user) {
+        throw new Error('Not authenticated');
+      }
       
-      const { data, error } = await supabase
+      const { data, error: dbError } = await supabase
         .from('users')
-        .select('*')
+        .select('id, email, role, organization_id')
         .eq('auth_uid', user.id)
         .single();
       
-      if (error) throw error;
+      if (dbError) {
+        throw dbError;
+      }
+      
       return data;
     },
-    staleTime: 1000 * 60 * 5, // 5 minutes
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    retry: 1,
   });
 };

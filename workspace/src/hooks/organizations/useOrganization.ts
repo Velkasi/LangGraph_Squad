@@ -1,19 +1,22 @@
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from '@/lib/supabase';
+import { supabase } from '../../lib/supabase';
 
-export const useOrganization = (orgId: string) => {
+export const useOrganization = (organizationId: string) => {
   return useQuery({
-    queryKey: ['organization', orgId],
+    queryKey: ['organization', organizationId],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('organizations')
         .select('*')
-        .eq('id', orgId)
+        .eq('id', organizationId)
         .single();
       
-      if (error) throw error;
+      if (error) {
+        throw error;
+      }
+      
       return data;
     },
-    enabled: !!orgId,
+    enabled: !!organizationId,
   });
 };
