@@ -1,64 +1,33 @@
-import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
-import { useRouter } from 'expo-router';
 
-interface User {
+export interface CurrentUser {
   id: string;
   email: string;
   role: 'admin' | 'practitioner' | 'patient';
   organization_id: string;
 }
 
-export function useCurrentUser() {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
-  const router = useRouter();
-
-  useEffect(() => {
-    async function getUser() {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) {
-          setUser(null);
-          router.replace('/(auth)/login');
-          return;
-        }
-
-        const { data, error } = await supabase
-          .from('users')
-          .select('id, email, role, organization_id')
-          .eq('auth_uid', session.user.id)
-          .single();
-
-        if (error) throw error;
-
-        setUser(data);
-      } catch (error) {
-        console.error('Error fetching user:', error);
-        setUser(null);
-        router.replace('/(auth)/login');
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    getUser();
-
-    const { data: authListener } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        if (!session) {
-          setUser(null);
-          router.replace('/(auth)/login');
-        } else {
-          getUser();
-        }
-      }
-    );
-
-    return () => {
-      authListener?.subscription.unsubscribe();
-    };
-  }, [router]);
-
-  return { user, loading };
-}
+export const useCurrentUser = () => {
+  return useQuery<CurrentUser, Error>({
+    queryKey: ['currentUser'],
+    queryFn: async () => {
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      
+      if (authError) throw authError;
+      if (!user) throw new Error('No user logged in');
+      
+      const { data, error } = await supabase
+        .from('users')
+        .select('id, email, role, organization_id')
+        .eq('auth_uid', user.id)
+        .single();
+      
+      if (error) throw error;
+      
+      return data;
+    },
+    staleTime: 1000 * 60 * 5, // 5 minutes
+    cacheTime: 1000 * 60 * 30, // 30 minutes
+  });
+};

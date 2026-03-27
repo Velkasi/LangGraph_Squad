@@ -1,247 +1,176 @@
--- Table: organizations
+-- Enable UUID extension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Create organizations table
 CREATE TABLE IF NOT EXISTS organizations (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   name TEXT NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- RLS Policies for organizations
-ALTER TABLE organizations ENABLE ROW LEVEL SECURITY;
--- Only admins can manage organizations (assumed)
-CREATE POLICY "Admin can manage organizations" ON organizations
-  FOR ALL USING (
-    (auth.jwt() ->> 'role')::TEXT = 'admin'
-  );
-
-
--- Table: users
+-- Create users table with role and organization_id
 CREATE TABLE IF NOT EXISTS users (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  auth_uid UUID NOT NULL UNIQUE,
+  email TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('admin', 'practitioner', 'patient')),
   organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  email TEXT NOT NULL UNIQUE,
-  role TEXT CHECK (role IN ('admin', 'practitioner', 'patient')) NOT NULL,
-  auth_uid TEXT NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- RLS Policies for users
-ALTER TABLE users ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users can view own org users" ON users
-  FOR SELECT USING (
-    organization_id = (auth.jwt() ->> 'org_id')::UUID
-  );
-CREATE POLICY "Admins can manage users" ON users
-  FOR INSERT WITH CHECK (
-    (auth.jwt() ->> 'role')::TEXT = 'admin' AND
-    organization_id = (auth.jwt() ->> 'org_id')::UUID
-  );
-CREATE POLICY "Users cannot modify users" ON users
-  FOR UPDATE USING (FALSE);
-CREATE POLICY "Users cannot delete users" ON users
-  FOR DELETE USING (FALSE);
-
-
--- Table: practitioners
+-- Create practitioners table
 CREATE TABLE IF NOT EXISTS practitioners (
-  id UUID PRIMARY KEY DEFAULT gen_random_uid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   specialty TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- RLS Policies for practitioners
-ALTER TABLE practitioners ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Practitioners and admins can view" ON practitioners
-  FOR SELECT USING (
-    organization_id = (auth.jwt() ->> 'org_id')::UUID
-  );
-CREATE POLICY "Admins can insert practitioners" ON practitioners
-  FOR INSERT WITH CHECK (
-    organization_id = (auth.jwt() ->> 'org_id')::UUID
-  );
-CREATE POLICY "Practitioners cannot modify practitioners" ON practitioners
-  FOR UPDATE USING (FALSE);
-CREATE POLICY "Practitioners cannot delete practitioners" ON practitioners
-  FOR DELETE USING (FALSE);
-
-
--- Table: patients
+-- Create patients table
 CREATE TABLE IF NOT EXISTS patients (
-  id UUID PRIMARY KEY DEFAULT gen_random_uid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  practitioner_id UUID NOT NULL REFERENCES practitioners(id) ON DELETE RESTRICT,
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL
+  practitioner_id UUID NOT NULL REFERENCES practitioners(id) ON DELETE CASCADE,
+  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- RLS Policies for patients
-ALTER TABLE patients ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Patients can view self" ON patients
-  FOR SELECT USING (
-    user_id = (auth.jwt() ->> 'sub')::UUID
-  );
-CREATE POLICY "Practitioners can view patients" ON patients
-  FOR SELECT USING (
-    organization_id = (auth.jwt() ->> 'org_id')::UUID
-  );
-CREATE POLICY "Admins can manage patients" ON patients
-  FOR ALL USING (
-    organization_id = (auth.jwt() ->> 'org_id')::UUID
-  );
-
-
--- Table: pathologies
+-- Create pathologies table
 CREATE TABLE IF NOT EXISTS pathologies (
-  id UUID PRIMARY KEY DEFAULT gen_random_uid(),
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- RLS Policies for pathologies
-ALTER TABLE pathologies ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users can view pathologies" ON pathologies
-  FOR SELECT USING (
-    organization_id = (auth.jwt() ->> 'org_id')::UUID
-  );
-CREATE POLICY "Admins and practitioners can create pathologies" ON pathologies
-  FOR INSERT WITH CHECK (
-    organization_id = (auth.jwt() ->> 'org_id')::UUID
-  );
-CREATE POLICY "Admins and practitioners can update pathologies" ON pathologies
-  FOR UPDATE USING (
-    organization_id = (auth.jwt() ->> 'org_id')::UUID
-  );
-CREATE POLICY "Admins can delete pathologies" ON pathologies
-  FOR DELETE USING (
-    organization_id = (auth.jwt() ->> 'org_id')::UUID
-  );
-
-
--- Table: programs
+-- Create programs table
 CREATE TABLE IF NOT EXISTS programs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uid(),
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   pathology_id UUID NOT NULL REFERENCES pathologies(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   description TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- RLS Policies for programs
-ALTER TABLE programs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users can view programs" ON programs
-  FOR SELECT USING (
-    organization_id = (auth.jwt() ->> 'org_id')::UUID
-  );
-CREATE POLICY "Admins and practitioners can manage programs" ON programs
-  FOR ALL USING (
-    organization_id = (auth.jwt() ->> 'org_id')::UUID
-  );
-
-
--- Table: videos
+-- Create videos table
 CREATE TABLE IF NOT EXISTS videos (
-  id UUID PRIMARY KEY DEFAULT gen_random_uid(),
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  source_type TEXT CHECK (source_type IN ('supabase', 'youtube', 'vimeo')) NOT NULL,
+  source_type TEXT NOT NULL CHECK (source_type IN ('supabase', 'youtube', 'vimeo')),
   source_ref TEXT NOT NULL,
   title TEXT NOT NULL,
-  duration_seconds INTEGER NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL
+  duration_seconds INTEGER,
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- RLS Policies for videos
-ALTER TABLE videos ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users can view videos" ON videos
-  FOR SELECT USING (
-    organization_id = (auth.jwt() ->> 'org_id')::UUID
-  );
-CREATE POLICY "Admins and practitioners can manage videos" ON videos
-  FOR ALL USING (
-    organization_id = (auth.jwt() ->> 'org_id')::UUID
-  );
-
-
--- Table: program_videos
+-- Create program_videos table (join table)
 CREATE TABLE IF NOT EXISTS program_videos (
-  id UUID PRIMARY KEY DEFAULT gen_random_uid(),
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   program_id UUID NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
   video_id UUID NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
-  order_index INTEGER NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL,
-  UNIQUE(program_id, video_id)
+  order_index INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- RLS Policies for program_videos
-ALTER TABLE program_videos ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users can view program_videos" ON program_videos
-  FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM programs p WHERE p.id = program_id AND p.organization_id = (auth.jwt() ->> 'org_id')::UUID
-    )
-  );
-CREATE POLICY "Admins and practitioners can manage program_videos" ON program_videos
-  FOR ALL USING (
-    EXISTS (
-      SELECT 1 FROM programs p WHERE p.id = program_id AND p.organization_id = (auth.jwt() ->> 'org_id')::UUID
-    )
-  );
-
-
--- Table: patient_programs
+-- Create patient_programs table
 CREATE TABLE IF NOT EXISTS patient_programs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uid(),
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   patient_id UUID NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
   program_id UUID NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
-  assigned_by UUID NOT NULL REFERENCES practitioners(id) ON DELETE RESTRICT,
-  assigned_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL,
-  mode TEXT CHECK (mode IN ('manual', 'auto')) NOT NULL,
-  UNIQUE(patient_id, program_id)
+  assigned_by UUID NOT NULL REFERENCES practitioners(id) ON DELETE CASCADE,
+  assigned_at TIMESTAMPTZ DEFAULT NOW(),
+  mode TEXT NOT NULL CHECK (mode IN ('manual', 'auto')),
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- RLS Policies for patient_programs
+-- Create video_progress table
+CREATE TABLE IF NOT EXISTS video_progress (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  patient_id UUID NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+  video_id UUID NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+  last_position_seconds INTEGER DEFAULT 0,
+  completed BOOLEAN DEFAULT FALSE,
+  watched_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Enable RLS on all tables
+ALTER TABLE organizations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE practitioners ENABLE ROW LEVEL SECURITY;
+ALTER TABLE patients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pathologies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE programs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE videos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE program_videos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE patient_programs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Patients can view own program assignments" ON patient_programs
-  FOR SELECT USING (
-    patient_id IN (SELECT id FROM patients WHERE user_id = (auth.jwt() ->> 'sub')::UUID)
-  );
-CREATE POLICY "Practitioners can view assigned programs" ON patient_programs
-  FOR SELECT USING (
-    assigned_by = (auth.jwt() ->> 'sub')::UUID
-  );
-CREATE POLICY "Admins and practitioners can assign programs" ON patient_programs
-  FOR ALL USING (
-    EXISTS (
-      SELECT 1 FROM patients p WHERE p.id = patient_id AND p.organization_id = (auth.jwt() ->> 'org_id')::UUID
+ALTER TABLE video_progress ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies
+
+-- Organizations: Users can access their own organization
+CREATE POLICY "Users can access own organization"
+  ON organizations FOR SELECT
+  USING (id = (auth.jwt()->>'org_id')::uuid);
+
+-- Users: Can only access users from their organization
+CREATE POLICY "Users can access own org users"
+  ON users FOR SELECT
+  USING (organization_id = (auth.jwt()->>'org_id')::uuid);
+
+-- Practitioners: Can access practitioners from their organization
+CREATE POLICY "Practitioners access own org practitioners"
+  ON practitioners FOR SELECT
+  USING (organization_id = (auth.jwt()->>'org_id')::uuid);
+
+-- Patients: Can access patients from their organization
+-- Practitioners can access patients assigned to them
+-- Patients can access their own data
+CREATE POLICY "Access patients by organization"
+  ON patients FOR SELECT
+  USING (organization_id = (auth.jwt()->>'org_id')::uuid);
+
+-- Pathologies: Can access pathologies from their organization
+CREATE POLICY "Access pathologies by organization"
+  ON pathologies FOR SELECT
+  USING (organization_id = (auth.jwt()->>'org_id')::uuid);
+
+-- Programs: Can access programs from their organization
+CREATE POLICY "Access programs by organization"
+  ON programs FOR SELECT
+  USING (organization_id = (auth.jwt()->>'org_id')::uuid);
+
+-- Videos: Can access videos from their organization
+CREATE POLICY "Access videos by organization"
+  ON videos FOR SELECT
+  USING (organization_id = (auth.jwt()->>'org_id')::uuid);
+
+-- Program videos: Can access program_videos from their organization's programs
+CREATE POLICY "Access program_videos by organization"
+  ON program_videos FOR SELECT
+  USING (
+    program_id IN (
+      SELECT id FROM programs WHERE organization_id = (auth.jwt()->>'org_id')::uuid
     )
   );
 
-
--- Table: video_progress
-CREATE TABLE IF NOT EXISTS video_progress (
-  id UUID PRIMARY KEY DEFAULT gen_random_uid(),
-  patient_id UUID NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
-  video_id UUID NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
-  last_position_seconds INTEGER NOT NULL,
-  completed BOOLEAN DEFAULT FALSE NOT NULL,
-  watched_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL,
-  UNIQUE(patient_id, video_id)
-);
-
--- RLS Policies for video_progress
-ALTER TABLE video_progress ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Patients can view own progress" ON video_progress
-  FOR ALL USING (
-    patient_id IN (SELECT id FROM patients WHERE user_id = (auth.jwt() ->> 'sub')::UUID)
-  );
-CREATE POLICY "Practitioners can view patient progress" ON video_progress
-  FOR SELECT USING (
+-- Patient programs: Can access patient_programs from their organization
+CREATE POLICY "Access patient_programs by organization"
+  ON patient_programs FOR SELECT
+  USING (
     patient_id IN (
-      SELECT p.id FROM patients p
-      JOIN practitioners pr ON p.practitioner_id = pr.id
-      WHERE pr.organization_id = (auth.jwt() ->> 'org_id')::UUID
+      SELECT id FROM patients WHERE organization_id = (auth.jwt()->>'org_id')::uuid
+    )
+  );
+
+-- Video progress: Can access video_progress from their organization's patients
+CREATE POLICY "Access video_progress by organization"
+  ON video_progress FOR SELECT
+  USING (
+    patient_id IN (
+      SELECT id FROM patients WHERE organization_id = (auth.jwt()->>'org_id')::uuid
     )
   );

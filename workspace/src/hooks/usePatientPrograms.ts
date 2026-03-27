@@ -1,8 +1,7 @@
-import { useState, useEffect } from 'react';
-import { useCurrentUser } from './useCurrentUser';
+import { useQuery } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 
-interface PatientProgram {
+export interface PatientProgram {
   id: string;
   patient_id: string;
   program_id: string;
@@ -17,51 +16,27 @@ interface PatientProgram {
   };
 }
 
-export function usePatientPrograms() {
-  const { user, loading: userLoading } = useCurrentUser();
-  const [programs, setPrograms] = useState<PatientProgram[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    async function getPrograms() {
-      if (!user || user.role !== 'patient') {
-        setPrograms([]);
-        setLoading(false);
-        return;
-      }
-
-      try {
-        const { data, error } = await supabase
-          .from('patient_programs')
-          .select(`
-            id,
-            patient_id,
-            program_id,
-            assigned_by,
-            assigned_at,
-            mode,
-            program:programs!inner(
-              id,
-              title,
-              description,
-              pathology_id
-            )
-          `)
-          .eq('patient_id', user.id);
-
-        if (error) throw error;
-
-        setPrograms(data);
-      } catch (error) {
-        console.error('Error fetching patient programs:', error);
-        setPrograms([]);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    getPrograms();
-  }, [user]);
-
-  return { programs, loading: loading || userLoading };
-}
+export const usePatientPrograms = (patientId: string) => {
+  return useQuery<PatientProgram[], Error>({
+    queryKey: ['patientPrograms', patientId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('patient_programs')
+        .select(`
+          id,
+          patient_id,
+          program_id,
+          assigned_by,
+          assigned_at,
+          mode,
+          program:programs(id, title, description, pathology_id)
+        `)
+        .eq('patient_id', patientId);
+      
+      if (error) throw error;
+      
+      return data;
+    },
+    enabled: !!patientId,
+  });
+};

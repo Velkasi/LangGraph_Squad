@@ -1,46 +1,27 @@
-import { useState, useEffect } from 'react';
-import { useCurrentUser } from './useCurrentUser';
+import { useQuery } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 
-interface Organization {
+export interface Organization {
   id: string;
   name: string;
   created_at: string;
 }
 
-export function useOrganization() {
-  const { user, loading: userLoading } = useCurrentUser();
-  const [organization, setOrganization] = useState<Organization | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    async function getOrganization() {
-      if (!user) {
-        setOrganization(null);
-        setLoading(false);
-        return;
-      }
-
-      try {
-        const { data, error } = await supabase
-          .from('organizations')
-          .select('id, name, created_at')
-          .eq('id', user.organization_id)
-          .single();
-
-        if (error) throw error;
-
-        setOrganization(data);
-      } catch (error) {
-        console.error('Error fetching organization:', error);
-        setOrganization(null);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    getOrganization();
-  }, [user]);
-
-  return { organization, loading: loading || userLoading };
-}
+export const useOrganization = (organizationId: string) => {
+  return useQuery<Organization, Error>({
+    queryKey: ['organization', organizationId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('organizations')
+        .select('id, name, created_at')
+        .eq('id', organizationId)
+        .single();
+      
+      if (error) throw error;
+      
+      return data;
+    },
+    enabled: !!organizationId,
+    staleTime: 1000 * 60 * 10, // 10 minutes
+  });
+};

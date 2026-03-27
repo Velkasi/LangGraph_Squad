@@ -1,8 +1,7 @@
-import { useState, useEffect } from 'react';
-import { useCurrentUser } from './useCurrentUser';
+import { useQuery } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 
-interface VideoProgress {
+export interface VideoProgress {
   id: string;
   patient_id: string;
   video_id: string;
@@ -11,40 +10,24 @@ interface VideoProgress {
   watched_at: string;
 }
 
-export function useVideoProgress(videoId: string | undefined) {
-  const { user, loading: userLoading } = useCurrentUser();
-  const [progress, setProgress] = useState<VideoProgress | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    async function getProgress() {
-      if (!user || !videoId || user.role !== 'patient') {
-        setProgress(null);
-        setLoading(false);
-        return;
+export const useVideoProgress = (patientId: string, videoId: string) => {
+  return useQuery<VideoProgress | null, Error>({
+    queryKey: ['videoProgress', patientId, videoId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('video_progress')
+        .select('*')
+        .eq('patient_id', patientId)
+        .eq('video_id', videoId)
+        .single();
+      
+      if (error) {
+        if (error.code === 'PGRST116') return null; // No record found
+        throw error;
       }
-
-      try {
-        const { data, error } = await supabase
-          .from('video_progress')
-          .select('*')
-          .eq('patient_id', user.id)
-          .eq('video_id', videoId)
-          .single();
-
-        if (error && error.code !== 'PGRST116') throw error; // PGRST116 = no rows found
-
-        setProgress(data || null);
-      } catch (error) {
-        console.error('Error fetching video progress:', error);
-        setProgress(null);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    getProgress();
-  }, [user, videoId]);
-
-  return { progress, loading: loading || userLoading };
-}
+      
+      return data;
+    },
+    enabled: !!patientId && !!videoId,
+  });
+};
