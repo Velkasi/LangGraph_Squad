@@ -1,80 +1,83 @@
 import React from 'react';
-import { View, Text, Platform } from 'react-native';
+import { View, Dimensions, Platform } from 'react-native';
 import { Video, ResizeMode } from 'expo-av';
 import { WebView } from 'react-native-webview';
+import { Video as VideoType } from '../types/db';
 
 interface VideoPlayerProps {
-  sourceType: 'supabase' | 'youtube' | 'vimeo';
-  sourceRef: string;
+  video: VideoType;
   onPlaybackStatusUpdate?: (status: any) => void;
 }
 
-export default function VideoPlayer({
-  sourceType,
-  sourceRef,
+const VideoPlayer: React.FC<VideoPlayerProps> = ({
+  video,
   onPlaybackStatusUpdate,
-}: VideoPlayerProps) {
-  // Handle Web and Mobile platforms differently
-  if (Platform.OS === 'web') {
-    let videoUrl = '';
+}) => {
+  const { width } = Dimensions.get('window');
+  const height = (width * 9) / 16; // 16:9 aspect ratio
 
-    switch (sourceType) {
-      case 'youtube':
-        videoUrl = `https://www.youtube.com/embed/${sourceRef}`;
-        return (
-          <WebView
-            source={{ uri: videoUrl }}
-            style={{ width: '100%', height: 200 }}
-            javaScriptEnabled={true}
-            domStorageEnabled={true}
-            allowsInlineMediaPlayback={true}
-          />
-        );
-      case 'vimeo':
-        videoUrl = `https://player.vimeo.com/video/${sourceRef}`;
-        return (
-          <WebView
-            source={{ uri: videoUrl }}
-            style={{ width: '100%', height: 200 }}
-            javaScriptEnabled={true}
-            domStorageEnabled={true}
-            allowsInlineMediaPlayback={true}
-          />
-        );
-      case 'supabase':
-        // For Supabase, we would generate a signed URL
-        // This is a placeholder - actual implementation would use supabase.storage
-        const signedUrl = `https://supabase-project-id.supabase.co/storage/v1/object/public/videos/${sourceRef}`;
-        return (
-          <video
-            src={signedUrl}
-            controls
-            style={{ width: '100%', height: 200 }}
-          />
-        );
-      default:
-        return <Text>Unsupported video source</Text>;
-    }
-  } else {
-    // Native mobile platforms
-    let videoUri = '';
+  if (!video.source_type || !video.source_ref) {
+    return (
+      <View style={[{ width, height }, styles.container]}>
+        <Text style={styles.error}>Vidéo non disponible</Text>
+      </View>
+    );
+  }
 
-    switch (sourceType) {
-      case 'supabase':
-        // On mobile, we need to generate a signed URL for Supabase storage
-        // This is a placeholder - actual implementation would use async fetch of signed URL
-        videoUri = `https://supabase-project-id.supabase.co/storage/v1/object/public/videos/${sourceRef}`;
+  const renderVideoContent = () => {
+    switch (video.source_type) {
+      case 'supabase': {
+        const source = { uri: video.source_ref };
         return (
           <Video
-            source={{ uri: videoUri }}
-            style={{ width: '100%', height: 200 }}
+            source={source}
+            style={{ width, height }}
             useNativeControls
             resizeMode={ResizeMode.CONTAIN}
             onPlaybackStatusUpdate={onPlaybackStatusUpdate}
           />
         );
+      }
+      case 'youtube': {
+        const videoId = video.source_ref;
+        const youtubeUrl = `https://www.youtube.com/embed/${videoId}?enablejsapi=1`;
+        return (
+          <WebView
+            source={{ uri: youtubeUrl }}
+            style={{ width, height }}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
+            useWebKit={true}
+            scrollEnabled={false}
+          />
+        );
+      }
+      case 'vimeo': {
+        const videoId = video.source_ref;
+        const vimeoUrl = `https://player.vimeo.com/video/${videoId}`;
+        return (
+          <WebView
+            source={{ uri: vimeoUrl }}
+            style={{ width, height }}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
+            useWebKit={true}
+            scrollEnabled={false}
+          />
+        );
+      }
       default:
-        return <Text>Video playback not supported for {sourceType} on mobile</Text>;
+        return (
+          <View style={[{ width, height }, styles.container]}>
+            <Text style={styles.error}>Type de source non supporté</Text>
+          </View>
+        );
     }
-  }
-}
+  };
+
+  return <View style={styles.container}>{renderVideoContent()}</View>;
+};
+
+const styles = { container: { justifyContent: 'center', alignItems: 'center' }, error: { color: 'red', fontSize: 16 } };
+
+export default VideoPlayer;

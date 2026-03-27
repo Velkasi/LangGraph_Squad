@@ -1,29 +1,21 @@
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from '@/lib/supabase';
+import { supabase } from '../../lib/supabase';
+import { Pathology } from '../../types/db';
 
-type Pathology = {
-  id: string;
-  organization_id: string | null;
-  name: string;
-  description: string | null;
-  created_at: string;
-};
-
-export function usePathologies() {
+export const usePathologies = () => {
   return useQuery<Pathology[], Error>({
     queryKey: ['pathologies'],
-    queryFn: async () => {
+    queryFn: async (): Promise<Pathology[]> => {
       const { data, error } = await supabase
         .from('pathologies')
         .select('*')
         .order('name');
 
       if (error) {
-        console.error('Error fetching pathologies:', error);
         throw error;
       }
 
-      return data;
+      return data as Pathology[];
     },
   });
-}
+};

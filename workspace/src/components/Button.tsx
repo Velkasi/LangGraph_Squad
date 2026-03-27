@@ -1,98 +1,67 @@
 import React from 'react';
-import { TouchableOpacity, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import { TouchableOpacity, Text, StyleSheet } from 'react-native';
 
 interface ButtonProps {
   title: string;
   onPress: () => void;
-  variant?: 'primary' | 'secondary' | 'outline';
-  size?: 'small' | 'medium' | 'large';
+  variant?: 'primary' | 'secondary';
   disabled?: boolean;
-  loading?: boolean;
-  fullWidth?: boolean;
 }
 
-export default function Button({
+const Button: React.FC<ButtonProps> = ({
   title,
   onPress,
   variant = 'primary',
-  size = 'medium',
   disabled = false,
-  loading = false,
-  fullWidth = false,
-}: ButtonProps) {
-  const variantStyles = styles[variant];
-  const sizeStyles = styles[size];
-  const isDisabled = disabled || loading;
-
+}) => {
   return (
     <TouchableOpacity
       style={[
         styles.button,
-        variantStyles,
-        sizeStyles,
-        fullWidth && styles.fullWidth,
-        isDisabled && styles.disabled,
+        variant === 'primary' ? styles.primary : styles.secondary,
+        disabled && styles.disabled
       ]}
       onPress={onPress}
-      disabled={isDisabled}
-      accessibilityState={{ disabled: isDisabled }}
+      disabled={disabled}
     >
-      {loading ? (
-        <ActivityIndicator color={variant === 'outline' ? '#3498db' : 'white'} />
-      ) : (
-        <Text style={[styles.text, variant === 'outline' && styles.textOutline]}>{title}</Text>
-      )}
+      <Text style={[
+        styles.text,
+        variant === 'primary' ? styles.primaryText : styles.secondaryText
+      ]}>
+        {title}
+      </Text>
     </TouchableOpacity>
   );
-}
+};
 
 const styles = StyleSheet.create({
   button: {
     borderRadius: 8,
     paddingVertical: 12,
-    paddingHorizontal: 20,
+    paddingHorizontal: 24,
     alignItems: 'center',
     justifyContent: 'center',
-    minWidth: 100,
+    marginVertical: 10,
   },
   primary: {
-    backgroundColor: '#3498db',
+    backgroundColor: '#007AFF',
   },
   secondary: {
-    backgroundColor: '#e74c3c',
-  },
-  outline: {
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: '#3498db',
-  },
-  small: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    minWidth: 80,
-  },
-  medium: {
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    minWidth: 100,
-  },
-  large: {
-    paddingVertical: 16,
-    paddingHorizontal: 24,
-    minWidth: 120,
-  },
-  fullWidth: {
-    width: '100%',
+    backgroundColor: '#F2F2F7',
   },
   disabled: {
-    opacity: 0.6,
+    opacity: 0.5,
   },
   text: {
-    color: 'white',
     fontSize: 16,
     fontWeight: '600',
   },
-  textOutline: {
-    color: '#3498db',
+  primaryText: {
+    color: '#FFFFFF',
+  },
+  secondaryText: {
+    color: '#007AFF',
   },
 });
+
+export default Button;
