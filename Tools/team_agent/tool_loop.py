@@ -12,30 +12,54 @@ from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 logger = logging.getLogger(__name__)
 
 _MAX_TOOL_ITERATIONS = 30
-_MAX_MSG_CHARS = 16_000
-_MAX_HISTORY_MESSAGES = 6
+_MAX_MSG_CHARS = 6_000    # ~1.5K tokens par message
+_MAX_HISTORY_MESSAGES = 4
+_MAX_TOOL_RESULT_CHARS = 2_000  # tool results tronqués plus agressivement
 
 _last_call_time: dict[str, float] = {}  # clé → timestamp dernier appel
-_MIN_CALL_INTERVAL = 0.5  # anti-burst minimal entre deux appels sur la même clé
+_MIN_CALL_INTERVAL = 6.0  # 6s entre chaque appel = ~10 appels/min ≤ 30K TPM Cerebras
 
 
-def _get_groq_keys() -> list[str]:
+def _get_api_keys() -> list[str]:
+    """Retourne les clés disponibles — Cerebras/OpenRouter (clé unique) ou Groq (rotation)."""
     try:
-        from Config.team_agent.config import _GROQ_KEYS
+        from Config.team_agent.config import CEREBRAS_API_KEY, OPENROUTER_API_KEY, _GROQ_KEYS
+        if CEREBRAS_API_KEY:
+            return [CEREBRAS_API_KEY]
+        if OPENROUTER_API_KEY:
+            return [OPENROUTER_API_KEY]
         return list(_GROQ_KEYS)
     except Exception:
-        k = os.environ.get("GROQ_API_KEY", "")
+        k = os.environ.get("OPENAI_API_KEY") or os.environ.get("GROQ_API_KEY", "")
         return [k] if k else []
+
+
+def _get_openrouter_models() -> list[str]:
+    """Retourne la liste des modèles OpenRouter en rotation (vide si Cerebras ou Groq)."""
+    try:
+        from Config.team_agent.config import OPENROUTER_MODELS
+        return list(OPENROUTER_MODELS)
+    except Exception:
+        pass
+    return []
 
 
 def _build_llm(model: str, provider: str, tools: list, api_key: str):
     """Crée un LLM frais avec la clé donnée.
 
-    max_retries=0 désactive le retry interne de LangChain/httpx
-    pour que notre boucle de rotation gère les 429/413.
+    Pour OpenRouter : provider=openai + OPENAI_API_BASE déjà défini dans config.
+    max_retries=0 désactive le retry interne de LangChain/httpx.
     """
-    os.environ["GROQ_API_KEY"] = api_key
-    return init_chat_model(model, model_provider=provider, max_retries=0).bind_tools(tools)
+    if provider == "openai":
+        os.environ["OPENAI_API_KEY"] = api_key
+        base_url = os.environ.get("OPENAI_API_BASE", "https://api.cerebras.ai/v1")
+        return init_chat_model(
+            model, model_provider=provider, max_retries=0,
+            base_url=base_url, api_key=api_key,
+        ).bind_tools(tools)
+    else:
+        os.environ["GROQ_API_KEY"] = api_key
+        return init_chat_model(model, model_provider=provider, max_retries=0).bind_tools(tools)
 
 
 def _throttled_invoke(llm, messages: list, api_key: str):
@@ -66,8 +90,10 @@ def _truncate_messages(messages: list) -> list:
     result = []
     for m in system_msgs + other_msgs:
         content = m.content if isinstance(m.content, str) else str(m.content)
-        if len(content) > _MAX_MSG_CHARS:
-            content = content[:_MAX_MSG_CHARS] + "\n...[tronqué]"
+        # Tool results tronqués plus agressivement — souvent très verbeux
+        limit = _MAX_TOOL_RESULT_CHARS if isinstance(m, ToolMessage) else _MAX_MSG_CHARS
+        if len(content) > limit:
+            content = content[:limit] + "\n...[tronqué]"
             m = m.model_copy(update={"content": content})
         result.append(m)
     return result
@@ -83,6 +109,17 @@ def _is_rpm_exceeded(exc: Exception) -> bool:
     """429 RPM : trop de requêtes/minute — attendre sur la même clé."""
     msg = str(exc)
     return "429" in msg or "Too Many Requests" in msg
+
+
+def _is_tpm_minute(exc: Exception) -> bool:
+    """429 TPM/minute (Cerebras) : attendre 65s pour laisser la fenêtre se vider."""
+    msg = str(exc)
+    return "too_many_tokens_error" in msg or "token_quota_exceeded" in msg
+
+
+def _is_cerebras(provider: str) -> bool:
+    base = os.environ.get("OPENAI_API_BASE", "")
+    return "cerebras" in base
 
 
 def _inject_memory_context(messages: list) -> list:
@@ -139,63 +176,77 @@ def run_tool_loop(
     messages: list,
     tools: list,
     max_iterations: int = _MAX_TOOL_ITERATIONS,
-) -> tuple[list[AIMessage | ToolMessage], list[str]]:
+) -> tuple[list[AIMessage | ToolMessage], list[str], dict]:
     """Invoke the LLM in a loop, executing tool calls until the model stops.
-
-    - Injecte automatiquement les souvenirs L3/L4 pertinents avant le premier appel.
-    - Tronque le contexte pour rester sous la limite de tokens Groq.
-    - Retry sur la clé suivante en cas d'erreur 413/429.
 
     Returns:
         new_messages: AIMessage and ToolMessage produced during the loop
         files_written: paths passed to write_file calls
+        token_usage: {"prompt_tokens": int, "completion_tokens": int, "total_tokens": int}
     """
     tool_map = {t.name: t for t in tools}
     new_messages: list = []
     files_written: list[str] = []
+    token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
-    # Injecter les mémoires pertinentes pour réduire le contexte nécessaire
     current_messages = _inject_memory_context(list(messages))
 
-    groq_keys = _get_groq_keys()
-    key_index = 0
+    api_keys     = _get_api_keys()
+    or_models    = _get_openrouter_models()   # non-vide = mode OpenRouter
+    key_index    = 0
+    model_index  = 0
+    current_key  = api_keys[key_index] if api_keys else ""
+    current_model = or_models[model_index] if or_models else model
 
-    # LLM initial
-    llm = _build_llm(model, provider, tools, groq_keys[key_index] if groq_keys else "")
+    llm = _build_llm(current_model, provider, tools, current_key)
 
     for _ in range(max_iterations):
         trimmed = _truncate_messages(current_messages)
 
-        # 413 TPM → rotation vers clé suivante
-        # 429 RPM → attente courte sur la même clé
-        # autres erreurs → remonte immédiatement
         last_exc: Exception | None = None
         response = None
-        current_key = groq_keys[key_index] if groq_keys else ""
 
-        for attempt in range((len(groq_keys) or 1) * 2):  # max 2 tours complets
+        # max 2 tours sur tous les modèles (OpenRouter) ou toutes les clés (Groq)
+        n_slots = len(or_models) if or_models else (len(api_keys) or 1)
+        for attempt in range(n_slots * 2):
             try:
                 response = _throttled_invoke(llm, trimmed, current_key)
                 last_exc = None
                 break
             except Exception as exc:
                 last_exc = exc
-                if _is_tpm_exceeded(exc) and groq_keys:
-                    # Requête trop lourde pour ce compte → clé suivante
-                    key_index = (key_index + 1) % len(groq_keys)
-                    current_key = groq_keys[key_index]
+                if _is_tpm_minute(exc) or (_is_rpm_exceeded(exc) and _is_cerebras(provider)):
+                    # Cerebras : tout 429 → attendre 65s (TPM ou RPM, même traitement)
+                    wait = 65
+                    logger.info("Cerebras 429 → attente %ds", wait)
+                    time.sleep(wait)
+                    _last_call_time[current_key] = time.monotonic()
+                elif _is_rpm_exceeded(exc):
+                    if or_models:
+                        # OpenRouter 429 → modèle suivant
+                        model_index = (model_index + 1) % len(or_models)
+                        current_model = or_models[model_index]
+                        logger.warning(
+                            "OpenRouter 429 → rotation modèle %d (%s)",
+                            model_index + 1, current_model
+                        )
+                        llm = _build_llm(current_model, provider, tools, current_key)
+                    else:
+                        # Groq 429 RPM → attente courte, même clé
+                        wait = 5
+                        logger.info("RPM dépassé → attente %ds (même clé)", wait)
+                        time.sleep(wait)
+                elif _is_tpm_exceeded(exc) and api_keys and not or_models:
+                    # Groq 413 → clé suivante
+                    key_index = (key_index + 1) % len(api_keys)
+                    current_key = api_keys[key_index]
                     logger.warning(
                         "TPM dépassé → rotation clé %d (%s...)",
                         key_index + 1, current_key[:8]
                     )
-                    llm = _build_llm(model, provider, tools, current_key)
-                elif _is_rpm_exceeded(exc):
-                    # Trop de requêtes/min → attente courte, même clé
-                    wait = 5
-                    logger.info("RPM dépassé → attente %ds (même clé)", wait)
-                    time.sleep(wait)
+                    llm = _build_llm(current_model, provider, tools, current_key)
                 else:
-                    raise  # erreur non-rate-limit → remonte immédiatement
+                    raise
 
         if last_exc is not None:
             raise last_exc
@@ -205,6 +256,13 @@ def run_tool_loop(
         # Garantit que content n'est jamais None (évite MESSAGE_COERCION_FAILURE)
         if response.content is None:
             response = response.model_copy(update={"content": ""})
+
+        # Accumule les tokens si le provider les retourne
+        usage = getattr(response, "usage_metadata", None) or getattr(response, "response_metadata", {}).get("token_usage", {})
+        if usage:
+            token_usage["prompt_tokens"]     += getattr(usage, "input_tokens",  None) or usage.get("prompt_tokens",     0)
+            token_usage["completion_tokens"] += getattr(usage, "output_tokens", None) or usage.get("completion_tokens", 0)
+            token_usage["total_tokens"]      += getattr(usage, "total_tokens",  None) or usage.get("total_tokens",      0)
 
         new_messages.append(response)
         current_messages.append(response)
@@ -240,4 +298,8 @@ def run_tool_loop(
             new_messages.append(tool_msg)
             current_messages.append(tool_msg)
 
-    return new_messages, files_written
+    if token_usage["total_tokens"] == 0 and token_usage["prompt_tokens"] > 0:
+        token_usage["total_tokens"] = token_usage["prompt_tokens"] + token_usage["completion_tokens"]
+    logger.info("Tokens utilisés — prompt:%d completion:%d total:%d",
+                token_usage["prompt_tokens"], token_usage["completion_tokens"], token_usage["total_tokens"])
+    return new_messages, files_written, token_usage

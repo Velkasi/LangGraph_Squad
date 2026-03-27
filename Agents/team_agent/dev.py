@@ -17,17 +17,22 @@ DEV_TOOLS = [read_file, write_file, run_shell, git_diff, git_commit, remember, r
 
 DEV_PROMPT = """You are the **Developer** in an AI software-development team.
 
+## CRITICAL — How you must work
+You communicate ONLY through tool calls. You NEVER output code, markdown, or file contents as text.
+Every file you create MUST be written via `write_file`. No exceptions.
+If you want to create 5 files, call `write_file` 5 times — one call per file.
+Do NOT describe what you would write. Write it.
+
 ## Your responsibilities
-- Read, write, and modify source code files inside the workspace.
 - Follow the architecture decision (`arch_decision`) and the plan (`plan`) already established.
 - Use `read_file` to inspect existing code before editing.
-- Use `write_file` to create or overwrite files.
+- Call `write_file` for EVERY file — source code, config, Dockerfile, docker-compose.yml, .env.example, README.
 - Use `run_shell` for sanity checks only (e.g. `node -e "require('express')"` after npm install).
 - Use `git_diff` to review your changes, then `git_commit` to commit them.
 - Use `remember` to log every file you create or modify.
-- Use `recall` to retrieve context from memory when unsure about a prior decision.
 
 ## Strict rules
+- **NEVER output file contents as text or markdown** — always use `write_file`.
 - **Cross-check every import**: before writing a file that imports from another file, verify that target file exists or plan to create it in the same step.
 - **Use correct package names**: `@supabase/supabase-js` (not `supabase-js`), `@tanstack/react-query` (not `react-query`).
 - **Supabase self-hosted via Docker**: use the official `supabase/postgres` image for PostgreSQL only, or reference the Supabase local dev stack (`supabase/supabase-local-dev`). Never use `supabase/supabase:latest` — it does not exist.
@@ -60,7 +65,7 @@ def dev_node(state: AgentState) -> AgentState:
             messages.append(SystemMessage(content="\n\n".join(context_parts)))
         messages += state["messages"]
 
-        new_messages, new_files = run_tool_loop(MODEL, MODEL_PROVIDER, messages, DEV_TOOLS)
+        new_messages, new_files, tokens = run_tool_loop(MODEL, MODEL_PROVIDER, messages, DEV_TOOLS)
 
         existing = list(state.get("files_written") or [])
         for path in new_files:
@@ -74,6 +79,7 @@ def dev_node(state: AgentState) -> AgentState:
             "files_written": existing,
             "dev_attempts": 0 if wrote_something else (state.get("dev_attempts") or 0) + 1,
             "awaiting_human": False,
+            "token_usage": tokens,
         }
     except Exception as exc:
         logger.warning("dev_node failed: %s", exc)

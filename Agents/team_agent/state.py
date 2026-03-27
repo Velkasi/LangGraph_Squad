@@ -35,3 +35,4 @@ class AgentState(TypedDict):
     test_result: Optional[str]    # set by test agent
     writeup_done: Optional[bool]  # set by writeup agent
     dev_attempts: Optional[int]   # nombre de passages dans dev sans écriture
+    token_usage: Optional[dict]   # {"prompt_tokens": int, "completion_tokens": int, "total_tokens": int}

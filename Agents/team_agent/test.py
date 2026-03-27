@@ -95,7 +95,7 @@ def test_node(state: AgentState) -> AgentState:
             messages.append(SystemMessage(content="\n\n".join(context_parts)))
         messages += state["messages"]
 
-        new_messages, _ = run_tool_loop(MODEL, MODEL_PROVIDER, messages, TEST_TOOLS, max_iterations=30)
+        new_messages, _, tokens = run_tool_loop(MODEL, MODEL_PROVIDER, messages, TEST_TOOLS, max_iterations=30)
 
         test_text: str | None = None
         for msg in reversed(new_messages):
@@ -112,6 +112,7 @@ def test_node(state: AgentState) -> AgentState:
             "current_agent": "test",
             "test_result": test_text or "PASSED",
             "awaiting_human": False,
+            "token_usage": tokens,
         }
     except Exception as exc:
         logger.warning("test_node failed: %s", exc)

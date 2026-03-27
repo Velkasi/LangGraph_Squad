@@ -109,13 +109,15 @@ if prompt:
     with trace_container:
         st.divider()
         st.caption("**Live trace**")
-        status_placeholder  = st.empty()   # current agent badge
-        tool_placeholder    = st.empty()   # tool calls in progress
-        files_placeholder   = st.empty()   # files written so far
-        progress_placeholder = st.empty()  # step counter
+        status_placeholder   = st.empty()   # current agent badge
+        tool_placeholder     = st.empty()   # tool calls in progress
+        files_placeholder    = st.empty()   # files written so far
+        tokens_placeholder   = st.empty()   # token counter
+        progress_placeholder = st.empty()   # step counter
 
     _all_files: list[str] = []
     _step = 0
+    _total_tokens = {"prompt": 0, "completion": 0, "total": 0}
 
     def _render_trace(agent: str, tool_calls: list[str], files: list[str], step: int):
         icon = _AGENT_ICONS.get(agent, "🤖")
@@ -134,6 +136,11 @@ if prompt:
         else:
             files_placeholder.empty()
 
+        tokens_placeholder.markdown(
+            f"**Tokens** — prompt: `{_total_tokens['prompt']:,}` "
+            f"· completion: `{_total_tokens['completion']:,}` "
+            f"· **total: `{_total_tokens['total']:,}`**"
+        )
         progress_placeholder.caption(f"Étape {step}")
 
     try:
@@ -149,6 +156,7 @@ if prompt:
             "test_result": None,
             "writeup_done": False,
             "dev_attempts": 0,
+                "token_usage": None,
         }
 
         _current_agent = ""
@@ -182,6 +190,12 @@ if prompt:
                     if f not in _all_files:
                         _all_files.append(f)
 
+                # Accumulate token usage
+                usage = node_output.get("token_usage") or {}
+                _total_tokens["prompt"]     += usage.get("prompt_tokens", 0)
+                _total_tokens["completion"] += usage.get("completion_tokens", 0)
+                _total_tokens["total"]      += usage.get("total_tokens", 0)
+
                 # Update trace panel
                 _render_trace(_current_agent, _tool_calls_seen, _all_files, _step)
 
@@ -200,7 +214,10 @@ if prompt:
         )
 
     # Clear trace panel after completion
-    status_placeholder.success(f"Terminé — {_step} étape(s), {len(_all_files)} fichier(s) écrit(s)")
+    status_placeholder.success(
+        f"Terminé — {_step} étape(s) · {len(_all_files)} fichier(s) · "
+        f"{_total_tokens['total']:,} tokens ({_total_tokens['prompt']:,} prompt + {_total_tokens['completion']:,} completion)"
+    )
     tool_placeholder.empty()
     progress_placeholder.empty()
 

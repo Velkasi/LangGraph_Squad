@@ -4,24 +4,20 @@ from __future__ import annotations
 import logging
 from langchain_core.messages import AIMessage, SystemMessage
 from Agents.team_agent.state import AgentState
-from Config.team_agent.config import COMPLEX_MODEL as MODEL, MODEL_PROVIDER
-from Tools.team_agent.file_tools import read_file, write_file
-from Tools.team_agent.memory_tools import commit_to_identity, remember, recall
+from Config.team_agent.config import SIMPLE_MODEL as MODEL, MODEL_PROVIDER
+from Tools.team_agent.file_tools import write_file
 from Tools.team_agent.tool_loop import run_tool_loop
 
 logger = logging.getLogger(__name__)
 
-ARCHITECT_TOOLS = [read_file, write_file, remember, recall, commit_to_identity]
+ARCHITECT_TOOLS = [write_file]  # uniquement write_file pour DESIGN.md
 
 ARCHITECT_PROMPT = """You are the **Architect** in an AI software-development team.
 
 ## Your responsibilities
 - Make high-level technology, structure, and design decisions based on the plan.
 - Define module boundaries, data flows, APIs, and technology choices.
-- Use `read_file` to inspect existing code before deciding.
-- Use `write_file` to create architecture documents or skeleton files (e.g. a `DESIGN.md`).
-- Use `commit_to_identity` to persist durable architectural decisions.
-- Use `recall` to check for prior architecture decisions before making new ones.
+- Use `write_file` to save a `DESIGN.md` architecture document in the workspace.
 
 ## Output format
 Always end your response with a Markdown section:
@@ -33,7 +29,7 @@ Always end your response with a Markdown section:
 ```
 
 ## Available tools
-read_file · write_file · remember · recall · commit_to_identity
+write_file
 """
 
 
@@ -49,7 +45,7 @@ def architect_node(state: AgentState) -> AgentState:
             messages.append(SystemMessage(content="\n\n".join(context_parts)))
         messages += state["messages"]
 
-        new_messages, _ = run_tool_loop(MODEL, MODEL_PROVIDER, messages, ARCHITECT_TOOLS)
+        new_messages, _, tokens = run_tool_loop(MODEL, MODEL_PROVIDER, messages, ARCHITECT_TOOLS)
 
         arch_text: str | None = None
         for msg in reversed(new_messages):
@@ -66,6 +62,7 @@ def architect_node(state: AgentState) -> AgentState:
             "current_agent": "architect",
             "arch_decision": arch_text or "",
             "awaiting_human": False,
+            "token_usage": tokens,
         }
     except Exception as exc:
         logger.warning("architect_node failed: %s", exc)
