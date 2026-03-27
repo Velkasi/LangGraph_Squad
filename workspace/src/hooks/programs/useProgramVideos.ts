@@ -1,27 +1,41 @@
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '../../lib/supabase';
+import { Video, ProgramVideo } from '../../types/db';
 
-export const useProgramVideos = (programId: string) => {
-  return useQuery({
-    queryKey: ['programVideos', programId],
-    queryFn: async () => {
+interface ExtendedVideo extends Video {
+  program_video: ProgramVideo;
+}
+
+export const useProgramVideos = (programId: string | null) => {
+  return useQuery<ExtendedVideo[], Error>({
+    queryKey: ['program_videos', programId],
+    queryFn: async (): Promise<ExtendedVideo[]> => {
+      if (!programId) {
+        throw new Error('programId is required');
+      }
+
       const { data, error } = await supabase
-        .from('program_videos')
+        .from('videos')
         .select(`
-          order_index,
-          videos (id, title, duration_seconds, source_type, source_ref)
+          *,
+          program_videos!inner(
+            id,
+            program_id,
+            video_id,
+            order_index,
+            created_at
+          )
         `)
-        .eq('program_id', programId)
-        .order('order_index');
-      
+        .eq('program_videos.program_id', programId)
+        .order('program_videos.order_index');
+
       if (error) {
         throw error;
       }
-      
-      return data?.map(item => ({
-        ...item.videos,
-        order_index: item.order_index
-      })) || [];
+
+      return (data as ExtendedVideo[]).sort(
+        (a, b) => a.program_video.order_index - b.program_video.order_index
+      );
     },
     enabled: !!programId,
   });
