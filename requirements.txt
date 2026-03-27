@@ -1,0 +1,24 @@
+# ── requirements.txt — Dependencies for the team_agent multi-agent system ────
+
+# LangChain / LangGraph core
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-groq>=1.1.0
+langchain-anthropic>=0.3.0       # optional
+langchain-openai>=0.2.0          # optional
+
+# Memory backends
+redis>=5.0.0                     # L2 working memory
+chromadb>=0.5.0                  # L3 long-term memory
+psycopg2-binary>=2.9.0           # L4 identity store (Postgres)
+
+# Embeddings
+sentence-transformers>=3.0.0
+
+# Streamlit UI
+streamlit>=1.35.0
+
+# Utilities
+python-dotenv>=1.0.0
+pydantic>=2.0.0
