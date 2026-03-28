@@ -114,8 +114,8 @@ with tab_chat:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    prompt = st.chat_input("Describe the task for the team…", key="user_prompt_input")
-    if prompt and prompt != st.session_state.get("last_task"):
+    prompt = st.chat_input("Describe the task for the team…")
+    if prompt:
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
@@ -324,8 +324,14 @@ with tab_record:
 
     record_json = st.session_state.last_record_json
     if not record_json:
+        st.warning(f"⚠️ Pas de trace record. État: {bool(st.session_state.last_record_json)}")
         st.info("Lancez une tâche dans l'onglet Chat pour générer un trace record.")
+        
+        # Debug: show raw session state
+        if st.session_state.get("trace_saved"):
+            st.error("⚠️ Le trace a été sauvegardé mais last_record_json est vide!")
     else:
+        st.success(f"✅ Trace record généré")
         record_dict = json.loads(record_json)
 
         # ── Summary metrics ────────────────────────────────────────────────
@@ -413,8 +419,10 @@ with tab_log:
 
     events = st.session_state.last_events
     if not events:
+        st.warning(f"⚠️ Pas d'événements. État: {len(events)} événements trouvés")
         st.info("Lancez une tâche dans l'onglet Chat pour voir le log d'événements.")
     else:
+        st.success(f"✅ {len(events)} événements capturés")
         # ── Filters ────────────────────────────────────────────────────────
         col_f1, col_f2 = st.columns(2)
         with col_f1:

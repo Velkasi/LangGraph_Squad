@@ -90,4 +90,4 @@ print(f"[config] Shell timeout : {SHELL_TIMEOUT_SECONDS}s")
 
 INTERRUPT_BEFORE: list[str] = []
 
-print("[config] Configuration chargée avec succès ✓")
+print("[config] Configuration chargee avec succes OK")
