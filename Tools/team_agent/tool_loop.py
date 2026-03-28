@@ -8,6 +8,8 @@ import time
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
+from Graph.team_agent.tracer import TraceEvent, get_tracer
+import datetime as _dt
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +124,7 @@ def _is_cerebras(provider: str) -> bool:
     return "cerebras" in base
 
 
-def _inject_memory_context(messages: list) -> list:
+def _inject_memory_context(messages: list, agent_name: str = "unknown") -> list:
     """Prepend a SystemMessage with relevant L3/L4 memories before the first HumanMessage.
 
     Extracts a query from the last HumanMessage or SystemMessage content,
@@ -158,6 +160,16 @@ def _inject_memory_context(messages: list) -> list:
             f"[{d.metadata.get('layer','?')}/{d.metadata.get('category','')}] {d.page_content}"
             for d in docs
         )
+
+        # ── Trace: memory inject ──────────────────────────────────────────────
+        try:
+            tracer = get_tracer()
+            layers = set(d.metadata.get("layer", "?") for d in docs)
+            tracer.memory_op(agent_name, "inject", "+".join(sorted(layers)),
+                             f"{len(docs)} docs injected")
+        except Exception:
+            pass
+
         memory_msg = SystemMessage(content=f"## Relevant memory (L3/L4)\n{memory_lines}")
 
         # Insert after system prompts, before the rest
@@ -176,20 +188,28 @@ def run_tool_loop(
     messages: list,
     tools: list,
     max_iterations: int = _MAX_TOOL_ITERATIONS,
+    agent_name: str = "unknown",
 ) -> tuple[list[AIMessage | ToolMessage], list[str], dict]:
     """Invoke the LLM in a loop, executing tool calls until the model stops.
+
+    Args:
+        agent_name: Name of the calling agent — used for trace events.
 
     Returns:
         new_messages: AIMessage and ToolMessage produced during the loop
         files_written: paths passed to write_file calls
         token_usage: {"prompt_tokens": int, "completion_tokens": int, "total_tokens": int}
     """
+    tracer = get_tracer()
+    tracer.agent_start(agent_name)
+    _loop_start = time.monotonic()
+
     tool_map = {t.name: t for t in tools}
     new_messages: list = []
     files_written: list[str] = []
     token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
-    current_messages = _inject_memory_context(list(messages))
+    current_messages = _inject_memory_context(list(messages), agent_name=agent_name)
 
     api_keys     = _get_api_keys()
     or_models    = _get_openrouter_models()   # non-vide = mode OpenRouter
@@ -200,7 +220,7 @@ def run_tool_loop(
 
     llm = _build_llm(current_model, provider, tools, current_key)
 
-    for _ in range(max_iterations):
+    for _iter in range(max_iterations):
         trimmed = _truncate_messages(current_messages)
 
         last_exc: Exception | None = None
@@ -249,6 +269,7 @@ def run_tool_loop(
                     raise
 
         if last_exc is not None:
+            tracer.error(agent_name, str(last_exc))
             raise last_exc
         if response is None:
             raise RuntimeError("LLM invoke returned None without exception")
@@ -259,15 +280,36 @@ def run_tool_loop(
 
         # Accumule les tokens si le provider les retourne
         usage = getattr(response, "usage_metadata", None) or getattr(response, "response_metadata", {}).get("token_usage", {})
+        iter_prompt     = 0
+        iter_completion = 0
+        iter_total      = 0
         if usage:
-            token_usage["prompt_tokens"]     += getattr(usage, "input_tokens",  None) or usage.get("prompt_tokens",     0)
-            token_usage["completion_tokens"] += getattr(usage, "output_tokens", None) or usage.get("completion_tokens", 0)
-            token_usage["total_tokens"]      += getattr(usage, "total_tokens",  None) or usage.get("total_tokens",      0)
+            iter_prompt     = getattr(usage, "input_tokens",  None) or usage.get("prompt_tokens",     0)
+            iter_completion = getattr(usage, "output_tokens", None) or usage.get("completion_tokens", 0)
+            iter_total      = getattr(usage, "total_tokens",  None) or usage.get("total_tokens",      0)
+            token_usage["prompt_tokens"]     += iter_prompt
+            token_usage["completion_tokens"] += iter_completion
+            token_usage["total_tokens"]      += iter_total
+
+        # ── Trace: LLM call ───────────────────────────────────────────────────
+        tool_calls = getattr(response, "tool_calls", None) or []
+        tracer.llm_call(
+            agent_name, current_model,
+            prompt_tokens=iter_prompt,
+            completion_tokens=iter_completion,
+            total_tokens=iter_total,
+            iteration=_iter + 1,
+        )
+        tracer.events.append(TraceEvent(
+            ts=_dt.datetime.now(_dt.timezone.utc).strftime("%H:%M:%S"),
+            event_type="llm_response",
+            agent=agent_name,
+            payload={"has_tool_calls": bool(tool_calls)},
+        ))
 
         new_messages.append(response)
         current_messages.append(response)
 
-        tool_calls = getattr(response, "tool_calls", None) or []
         if not tool_calls:
             break
 
@@ -281,6 +323,15 @@ def run_tool_loop(
                 if path and path not in files_written:
                     files_written.append(path)
 
+            # ── Trace: tool call ──────────────────────────────────────────────
+            _is_memory_tool = tool_name in ("remember", "recall", "commit_to_identity")
+            if _is_memory_tool:
+                layer = "L2+L3" if tool_name == "remember" else ("L4" if tool_name == "commit_to_identity" else "L3+L4")
+                tracer.memory_op(agent_name, tool_name, layer,
+                                 str(tool_args.get("content", tool_args.get("query", "")))[:120])
+            else:
+                tracer.tool_call(agent_name, tool_name, tool_args)
+
             tool_fn = tool_map.get(tool_name)
             if tool_fn is None:
                 result = f"Error: tool '{tool_name}' not found."
@@ -292,6 +343,10 @@ def run_tool_loop(
                     result = f"Error running {tool_name}: {exc}"
                     logger.warning("Tool %s failed: %s", tool_name, exc)
 
+            # ── Trace: tool result ────────────────────────────────────────────
+            if not _is_memory_tool:
+                tracer.tool_result(agent_name, tool_name, str(result))
+
             # tool_call_id ne peut pas être vide pour certains providers
             safe_id = tool_id or f"call_{tool_name}_{len(new_messages)}"
             tool_msg = ToolMessage(content=str(result) or "(no output)", tool_call_id=safe_id)
@@ -302,4 +357,8 @@ def run_tool_loop(
         token_usage["total_tokens"] = token_usage["prompt_tokens"] + token_usage["completion_tokens"]
     logger.info("Tokens utilisés — prompt:%d completion:%d total:%d",
                 token_usage["prompt_tokens"], token_usage["completion_tokens"], token_usage["total_tokens"])
+
+    _duration_ms = int((time.monotonic() - _loop_start) * 1000)
+    tracer.agent_done(agent_name, _duration_ms)
+
     return new_messages, files_written, token_usage

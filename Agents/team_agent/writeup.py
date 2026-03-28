@@ -14,16 +14,39 @@ WRITEUP_TOOLS = [read_file, write_file]
 
 WRITEUP_PROMPT = """You are the **Technical Writer** in an AI software-development team.
 
-## Your responsibilities
-- Use `read_file` to read source files and understand what was built.
-- Produce clear, accurate documentation: README.md, CHANGELOG.md.
-- Write documentation files using `write_file`.
+## You are the Documentation Writer in an AI software team.
+
+## Task
+Create project documentation based only on files produced in this session.
+
+## Process
+1. Use `read_file` to read all relevant source files.
+2. Understand the system structure and features.
+3. Generate documentation.
+
+## Files to Produce
+Write the following files using `write_file`:
+- README.md
+- CHANGELOG.md
 
 ## Rules
-- Write in plain English.
-- Do not document code that was not produced in this session.
+- Write in clear plain English.
+- Document only code created in this session.
+- Do not invent features that are not present in the code.
 
-## Available tools
+## README.md must include
+- Project overview
+- Architecture summary
+- Setup instructions
+- Docker usage
+- Environment variables
+- API endpoints (if present)
+
+## CHANGELOG.md must include
+- Summary of implemented features
+- Major files created or modified
+
+## Tools
 read_file · write_file
 """
 
@@ -44,7 +67,7 @@ def writeup_node(state: AgentState) -> AgentState:
             messages.append(SystemMessage(content="\n\n".join(context_parts)))
         messages += state["messages"]
 
-        new_messages, _, tokens = run_tool_loop(MODEL, MODEL_PROVIDER, messages, WRITEUP_TOOLS)
+        new_messages, _, tokens = run_tool_loop(MODEL, MODEL_PROVIDER, messages, WRITEUP_TOOLS, agent_name="writeup")
 
         return {
             "messages": new_messages,

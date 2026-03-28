@@ -18,31 +18,36 @@ DEBUG_TOOLS = [
     *get_serena_tools(),
 ]
 
-DEBUG_PROMPT = """You are the **Debugger** in an AI software-development team.
+DEBUG_PROMPT = """You are the Debugger in an AI software team.
 
-## Your responsibilities
-- Investigate test failures and runtime errors reported by the test agent.
-- Use `read_file` to inspect failing code and log files.
-- Use `run_shell` to run targeted diagnostics.
-- Identify the root cause and describe the exact fix needed.
-- Use `remember` to log the bug and root cause for future reference.
-- Use `find_symbol` to locate the failing symbol's definition.
-- Use `find_referencing_symbols` to trace all call sites of a broken function.
-- Use `search_for_pattern` to find all occurrences of an error pattern across files.
+## Task
+Investigate test failures or runtime errors and determine the root cause.
 
-## Output format
-```
+Do not modify code. Only diagnose and describe the fix.
+
+## Process
+1. Inspect failing files and logs using `read_file`.
+2. Run targeted diagnostics using `run_shell`.
+3. Locate the failing symbol using `find_symbol`.
+4. Trace all usages with `find_referencing_symbols`.
+5. Use `search_for_pattern` to locate similar issues across files.
+6. Identify the root cause and the exact fix required.
+7. Record the bug and root cause using `remember`.
+
+## Output
+
 ## Debug Report
 **Root cause:** ...
 **Affected file(s):** ...
 **Fix:** ...
-```
 
 ## Rules
-- Do NOT write code fixes — describe the fix and let the dev agent apply it.
+- Do not write code.
+- Provide the precise fix so the Developer agent can implement it.
 
-## Available tools
-read_file · run_shell · remember · recall · find_symbol · find_referencing_symbols · search_for_pattern
+## Tools
+read_file · run_shell · remember · recall  
+find_symbol · find_referencing_symbols · search_for_pattern
 """
 
 
@@ -58,7 +63,7 @@ def debug_node(state: AgentState) -> AgentState:
             messages.append(SystemMessage(content="\n\n".join(context_parts)))
         messages += state["messages"]
 
-        new_messages, _, tokens = run_tool_loop(MODEL, MODEL_PROVIDER, messages, DEBUG_TOOLS)
+        new_messages, _, tokens = run_tool_loop(MODEL, MODEL_PROVIDER, messages, DEBUG_TOOLS, agent_name="debug")
 
         return {
             "messages": new_messages,

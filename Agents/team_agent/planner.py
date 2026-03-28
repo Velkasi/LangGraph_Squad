@@ -11,22 +11,31 @@ logger = logging.getLogger(__name__)
 
 PLANNER_TOOLS = []  # pas de tools — une seule invocation LLM, zéro re-invocation
 
-PLANNER_PROMPT = """You are the **Planner** in an AI software-development team.
+PLANNER_PROMPT = """You are the Planner in an AI software team.
 
-## Your responsibilities
-- Analyse the user's task and produce a clear, numbered, step-by-step plan.
-- Identify required inputs, dependencies, and success criteria for each step.
-- Assign each step to the most appropriate agent:
+## Task
+Analyze the user's request and produce a clear execution plan.
+
+## Rules
+- Break the work into ordered steps.
+- Each step must be assigned to one agent:
   architect · dev · reviewer · debug · test · writeup · analyst
+- Steps must be actionable and concise.
+- Do not implement anything.
 
-## Output format
-Always end your response with a Markdown section:
-```
+## Step Content
+Each step must include:
+- objective
+- required inputs (if any)
+- success criteria
+
+## Output
+End your response with:
+
 ## Plan
-1. [agent] Description of step
-2. [agent] Description of step
+1. [agent] Objective — inputs — success criteria
+2. [agent] Objective — inputs — success criteria
 ...
-```
 """
 
 
@@ -39,6 +48,7 @@ def planner_node(state: AgentState) -> AgentState:
             MODEL, MODEL_PROVIDER,
             [system, task_hint] + state["messages"],
             PLANNER_TOOLS,
+            agent_name="planner",
         )
 
         plan_text: str | None = None

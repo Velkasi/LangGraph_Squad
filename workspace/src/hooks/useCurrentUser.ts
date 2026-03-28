@@ -1,33 +1,44 @@
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from '../lib/supabase';
+import { supabase } from '@/lib/supabase';
+import { AppUser, UserRole } from '@/types/user';
 
-export interface CurrentUser {
-  id: string;
-  email: string;
-  role: 'admin' | 'practitioner' | 'patient';
-  organization_id: string;
+interface UseCurrentUserReturn {
+  user: AppUser | null;
+  role: UserRole | null;
+  isLoading: boolean;
+  error: Error | null;
 }
 
-export const useCurrentUser = () => {
-  return useQuery<CurrentUser, Error>({
+export function useCurrentUser(): UseCurrentUserReturn {
+  const { data, isLoading, error } = useQuery<AppUser | null, Error>({
     queryKey: ['currentUser'],
     queryFn: async () => {
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      const { data: { session } } = await supabase.auth.getSession();
       
-      if (authError) throw authError;
-      if (!user) throw new Error('No user logged in');
+      if (!session?.user) {
+        return null;
+      }
       
-      const { data, error } = await supabase
+      const { data: userData, error: dbError } = await supabase
         .from('users')
-        .select('id, email, role, organization_id')
-        .eq('auth_uid', user.id)
+        .select('*')
+        .eq('auth_uid', session.user.id)
         .single();
       
-      if (error) throw error;
+      if (dbError) {
+        throw dbError;
+      }
       
-      return data;
+      return userData as AppUser;
     },
-    staleTime: 1000 * 60 * 5, // 5 minutes
-    cacheTime: 1000 * 60 * 30, // 30 minutes
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    cacheTime: 10 * 60 * 1000, // 10 minutes
   });
-};
+
+  return {
+    user: data,
+    role: data?.role || null,
+    isLoading,
+    error: error || null,
+  };
+}

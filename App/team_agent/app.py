@@ -1,4 +1,4 @@
-# ── app.py — Streamlit interface: chat UI with real-time trace ────
+# ── app.py — Streamlit interface: chat UI with real-time trace + Mermaid diagram ────
 
 from __future__ import annotations
 
@@ -8,11 +8,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 import uuid
 import time
+from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
 from Graph.team_agent.graph import graph
+from Graph.team_agent.tracer import reset_tracer, get_tracer
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -92,7 +95,10 @@ if prompt:
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # ── Real-time trace panel ──────────────────────────────────────────────
+    # ── Reset tracer for this new run ──────────────────────────────────────
+    tracer = reset_tracer()
+
+    # ── Agent icons ────────────────────────────────────────────────────────
     _AGENT_ICONS = {
         "planner":    "📋",
         "architect":  "🏗️",
@@ -105,19 +111,44 @@ if prompt:
         "supervisor": "🎯",
     }
 
-    trace_container = st.container()
-    with trace_container:
-        st.divider()
+    # ── Layout: trace panel (left) + Mermaid diagram (right) ──────────────
+    col_trace, col_diagram = st.columns([1, 2])
+
+    with col_trace:
         st.caption("**Live trace**")
-        status_placeholder   = st.empty()   # current agent badge
-        tool_placeholder     = st.empty()   # tool calls in progress
-        files_placeholder    = st.empty()   # files written so far
-        tokens_placeholder   = st.empty()   # token counter
-        progress_placeholder = st.empty()   # step counter
+        status_placeholder   = st.empty()
+        tool_placeholder     = st.empty()
+        files_placeholder    = st.empty()
+        tokens_placeholder   = st.empty()
+        progress_placeholder = st.empty()
+
+    with col_diagram:
+        st.caption("**Sequence diagram (live)**")
+        diagram_placeholder = st.empty()
 
     _all_files: list[str] = []
     _step = 0
     _total_tokens = {"prompt": 0, "completion": 0, "total": 0}
+
+    def _render_mermaid(mermaid_str: str) -> None:
+        """Render a Mermaid diagram inside an HTML iframe."""
+        html = f"""
+        <html>
+        <head>
+          <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+          <script>mermaid.initialize({{startOnLoad:true, theme:'default', sequence:{{useMaxWidth:false}}}});</script>
+          <style>body{{margin:0;padding:4px;background:#fafafa;}} .mermaid svg{{max-width:100%;}}</style>
+        </head>
+        <body>
+          <div class="mermaid">
+{mermaid_str}
+          </div>
+        </body>
+        </html>
+        """
+        diagram_placeholder.empty()
+        with col_diagram:
+            components.html(html, height=520, scrolling=True)
 
     def _render_trace(agent: str, tool_calls: list[str], files: list[str], step: int):
         icon = _AGENT_ICONS.get(agent, "🤖")
@@ -156,7 +187,7 @@ if prompt:
             "test_result": None,
             "writeup_done": False,
             "dev_attempts": 0,
-                "token_usage": None,
+            "token_usage": None,
         }
 
         _current_agent = ""
@@ -199,6 +230,12 @@ if prompt:
                 # Update trace panel
                 _render_trace(_current_agent, _tool_calls_seen, _all_files, _step)
 
+                # Update Mermaid diagram from live tracer
+                try:
+                    _render_mermaid(get_tracer().to_mermaid())
+                except Exception:
+                    pass
+
                 # Collect assistant messages for chat history
                 for m in msgs:
                     content = m.content if hasattr(m, "content") else str(m)
@@ -213,12 +250,28 @@ if prompt:
             {"role": "assistant", "content": f"**[error]** {exc}"}
         )
 
-    # Clear trace panel after completion
+    # ── Final diagram render ───────────────────────────────────────────────
+    try:
+        _render_mermaid(get_tracer().to_mermaid())
+    except Exception:
+        pass
+
+    # ── Export trace to workspace/traces/<thread_id>_trace.md ─────────────
+    try:
+        from Config.team_agent.config import WORKSPACE_DIR
+        trace_dir = Path(WORKSPACE_DIR) / "traces"
+        trace_path = trace_dir / f"{st.session_state.thread_id[:8]}_trace.md"
+        saved_path = get_tracer().save_md(trace_path, task=prompt)
+        _trace_export_msg = f"Trace saved → `{saved_path}`"
+    except Exception as exc:
+        _trace_export_msg = f"Trace export failed: {exc}"
+
+    # ── Clear live trace panel, show summary ──────────────────────────────
     status_placeholder.success(
         f"Terminé — {_step} étape(s) · {len(_all_files)} fichier(s) · "
         f"{_total_tokens['total']:,} tokens ({_total_tokens['prompt']:,} prompt + {_total_tokens['completion']:,} completion)"
     )
     tool_placeholder.empty()
-    progress_placeholder.empty()
+    progress_placeholder.caption(_trace_export_msg)
 
     st.rerun()

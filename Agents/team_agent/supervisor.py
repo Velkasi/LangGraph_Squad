@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from Agents.team_agent.state import AgentState
+from Graph.team_agent.tracer import get_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,11 @@ def supervisor_node(state: AgentState) -> dict:
         reason     = "all steps complete"
 
     logger.info("Supervisor → %s (%s)", next_agent, reason)
+
+    try:
+        get_tracer().supervisor_route(next_agent)
+    except Exception:
+        pass
 
     return {
         "next":          next_agent,

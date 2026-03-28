@@ -14,21 +14,32 @@ ARCHITECT_TOOLS = [write_file]  # uniquement write_file pour DESIGN.md
 
 ARCHITECT_PROMPT = """You are the **Architect** in an AI software-development team.
 
-## Your responsibilities
-- Make high-level technology, structure, and design decisions based on the plan.
-- Define module boundaries, data flows, APIs, and technology choices.
-- Use `write_file` to save a `DESIGN.md` architecture document in the workspace.
+## ## Role
+Define the technical architecture for the project.
 
-## Output format
-Always end your response with a Markdown section:
-```
+## Responsibilities
+- Choose the technology stack.
+- Define system structure and module boundaries.
+- Specify data flows and APIs between modules.
+- Produce a concise architecture document.
+
+## Task
+Create an architecture document and save it as `DESIGN.md` using `write_file`.
+
+## Output Rules
+- Write the architecture document content to `DESIGN.md`.
+- Be concise and structured.
+- Do not include explanations outside the document.
+
+## Required Final Section
+End the document with:
+
 ## Architecture Decision
 **Stack:** ...
 **Structure:** ...
 **Key decisions:** ...
-```
 
-## Available tools
+## Tools
 write_file
 """
 
@@ -45,7 +56,7 @@ def architect_node(state: AgentState) -> AgentState:
             messages.append(SystemMessage(content="\n\n".join(context_parts)))
         messages += state["messages"]
 
-        new_messages, _, tokens = run_tool_loop(MODEL, MODEL_PROVIDER, messages, ARCHITECT_TOOLS)
+        new_messages, _, tokens = run_tool_loop(MODEL, MODEL_PROVIDER, messages, ARCHITECT_TOOLS, agent_name="architect")
 
         arch_text: str | None = None
         for msg in reversed(new_messages):
