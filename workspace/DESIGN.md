@@ -1,12 +1,10 @@
-## Architecture Document
-
-## System Structure
-Backlog → DB → Hooks → Screens
-
-## Data Flows
-DB → Hooks → Screens
-
 ## Architecture Decision
 **Stack:** React Native + Expo Router + Supabase + React Query + TypeScript
-**Structure:** Backlog → DB → Hooks → Screens
-**Key decisions:** React Hooks for state management, Supabase for database operations
+**Structure:** DB + Auth + Hooks + Screens
+**Key decisions:**
+- Chaque fichier est immédiatement exécutable (pas de TODO bloquant)
+- Chaque hook : { data, isLoading, error } — jamais d’états partiels
+- Aucun écran n’appelle Supabase directement (tout passe par les hooks)
+
+## Tools
+write_file
