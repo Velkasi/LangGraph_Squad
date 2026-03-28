@@ -1,13 +1,14 @@
-# ── app.py — Streamlit interface: chat UI with real-time trace + Mermaid diagram ────
+# ── app.py — Streamlit interface: chat + live trace tabs ─────────────────────
 
 from __future__ import annotations
 
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..", "04_Tracer")))
 
+import json
 import uuid
-import time
 from pathlib import Path
 
 import streamlit as st
@@ -15,7 +16,8 @@ import streamlit.components.v1 as components
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
 from Graph.team_agent.graph import graph
-from Graph.team_agent.tracer import reset_tracer, get_tracer
+from agent_trace import get_builder, reset_builder, to_json as record_to_json, save_json, save_markdown
+from agent_trace.mermaid import events_to_mermaid
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -35,12 +37,27 @@ if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 
 if "messages" not in st.session_state:
-    st.session_state.messages = []  # list[dict] with keys "role" and "content"
+    st.session_state.messages = []
 
 if "graph_config" not in st.session_state:
     st.session_state.graph_config = {
         "configurable": {"thread_id": st.session_state.thread_id}
     }
+
+if "last_record_json" not in st.session_state:
+    st.session_state.last_record_json = None
+
+if "last_events" not in st.session_state:
+    st.session_state.last_events = []
+
+if "last_task" not in st.session_state:
+    st.session_state.last_task = ""
+
+if "last_files" not in st.session_state:
+    st.session_state.last_files = []
+
+if "last_tokens" not in st.session_state:
+    st.session_state.last_tokens = {"prompt": 0, "completion": 0, "total": 0}
 
 # ---------------------------------------------------------------------------
 # Sidebar
@@ -52,14 +69,14 @@ with st.sidebar:
     st.divider()
 
     st.subheader("Session")
-    st.code(st.session_state.thread_id, language=None)
+    st.code(st.session_state.thread_id[:8] + "…", language=None)
 
     if st.button("New session", use_container_width=True):
         st.session_state.thread_id = str(uuid.uuid4())
-        st.session_state.graph_config = {
-            "configurable": {"thread_id": st.session_state.thread_id}
-        }
+        st.session_state.graph_config = {"configurable": {"thread_id": st.session_state.thread_id}}
         st.session_state.messages = []
+        st.session_state.last_record_json = None
+        st.session_state.last_events = []
         st.rerun()
 
     st.divider()
@@ -76,202 +93,380 @@ with st.sidebar:
         st.write("(no active state)")
 
 # ---------------------------------------------------------------------------
-# Chat history
+# Tabs
 # ---------------------------------------------------------------------------
 
-st.title("Team Agent")
+tab_chat, tab_diagram, tab_record, tab_log = st.tabs([
+    "💬 Chat",
+    "📊 Sequence Diagram",
+    "🔬 Agent Trace (v1)",
+    "📋 Event Log",
+])
 
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+# ===========================================================================
+# TAB 1 — Chat
+# ===========================================================================
 
-# ---------------------------------------------------------------------------
-# Chat input
-# ---------------------------------------------------------------------------
+with tab_chat:
+    st.subheader("Team Agent")
 
-prompt = st.chat_input("Describe the task for the team…")
-if prompt:
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
 
-    # ── Reset tracer for this new run ──────────────────────────────────────
-    tracer = reset_tracer()
+    prompt = st.chat_input("Describe the task for the team…")
+    if prompt:
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
 
-    # ── Agent icons ────────────────────────────────────────────────────────
-    _AGENT_ICONS = {
-        "planner":    "📋",
-        "architect":  "🏗️",
-        "dev":        "💻",
-        "test":       "🧪",
-        "debug":      "🐛",
-        "reviewer":   "🔍",
-        "writeup":    "📝",
-        "analyst":    "📊",
-        "supervisor": "🎯",
-    }
-
-    # ── Layout: trace panel (left) + Mermaid diagram (right) ──────────────
-    col_trace, col_diagram = st.columns([1, 2])
-
-    with col_trace:
-        st.caption("**Live trace**")
-        status_placeholder   = st.empty()
-        tool_placeholder     = st.empty()
-        files_placeholder    = st.empty()
-        tokens_placeholder   = st.empty()
-        progress_placeholder = st.empty()
-
-    with col_diagram:
-        st.caption("**Sequence diagram (live)**")
-        diagram_placeholder = st.empty()
-
-    _all_files: list[str] = []
-    _step = 0
-    _total_tokens = {"prompt": 0, "completion": 0, "total": 0}
-
-    def _render_mermaid(mermaid_str: str) -> None:
-        """Render a Mermaid diagram inside an HTML iframe."""
-        html = f"""
-        <html>
-        <head>
-          <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-          <script>mermaid.initialize({{startOnLoad:true, theme:'default', sequence:{{useMaxWidth:false}}}});</script>
-          <style>body{{margin:0;padding:4px;background:#fafafa;}} .mermaid svg{{max-width:100%;}}</style>
-        </head>
-        <body>
-          <div class="mermaid">
-{mermaid_str}
-          </div>
-        </body>
-        </html>
-        """
-        diagram_placeholder.empty()
-        with col_diagram:
-            components.html(html, height=520, scrolling=True)
-
-    def _render_trace(agent: str, tool_calls: list[str], files: list[str], step: int):
-        icon = _AGENT_ICONS.get(agent, "🤖")
-        status_placeholder.markdown(
-            f"**{icon} Agent actif :** `{agent}`" if agent else "**En attente…**"
+        # ── Reset builder for this run ─────────────────────────────────────
+        from Config.team_agent.config import WORKSPACE_DIR
+        builder = reset_builder(
+            workspace_dir=WORKSPACE_DIR,
+            task=prompt,
+            session_id=f"local://session/{st.session_state.thread_id}",
         )
-        if tool_calls:
-            lines = "\n".join(f"- `{t}`" for t in tool_calls[-5:])
-            tool_placeholder.markdown(f"**Outils appelés :**\n{lines}")
-        else:
-            tool_placeholder.empty()
+        st.session_state.last_task = prompt
 
-        if files:
-            flines = "\n".join(f"- `{f}`" for f in files)
-            files_placeholder.markdown(f"**Fichiers écrits ({len(files)}) :**\n{flines}")
-        else:
-            files_placeholder.empty()
-
-        tokens_placeholder.markdown(
-            f"**Tokens** — prompt: `{_total_tokens['prompt']:,}` "
-            f"· completion: `{_total_tokens['completion']:,}` "
-            f"· **total: `{_total_tokens['total']:,}`**"
-        )
-        progress_placeholder.caption(f"Étape {step}")
-
-    try:
-        initial_state = {
-            "messages": [HumanMessage(content=prompt)],
-            "task": prompt,
-            "current_agent": "",
-            "files_written": [],
-            "awaiting_human": False,
-            "plan": None,
-            "arch_decision": None,
-            "review_result": None,
-            "test_result": None,
-            "writeup_done": False,
-            "dev_attempts": 0,
-            "token_usage": None,
+        # ── Live trace panel ───────────────────────────────────────────────
+        _AGENT_ICONS = {
+            "planner": "📋", "architect": "🏗️", "dev": "💻",
+            "test": "🧪", "debug": "🐛", "reviewer": "🔍",
+            "writeup": "📝", "analyst": "📊", "supervisor": "🎯",
         }
 
-        _current_agent = ""
+        st.divider()
+        st.caption("**Live trace**")
+        col_left, col_right = st.columns([1, 2])
+
+        with col_left:
+            status_ph   = st.empty()
+            tool_ph     = st.empty()
+            files_ph    = st.empty()
+            tokens_ph   = st.empty()
+            step_ph     = st.empty()
+
+        with col_right:
+            st.caption("Sequence diagram (live)")
+            diagram_ph = st.empty()
+
+        _all_files: list[str] = []
+        _step = 0
+        _total_tokens = {"prompt": 0, "completion": 0, "total": 0}
         _tool_calls_seen: list[str] = []
 
-        for chunk in graph.stream(
-            initial_state,
-            config=st.session_state.graph_config,
-        ):
-            for node_name, node_output in chunk.items():
-                if node_name in ("__end__", "__interrupt__"):
-                    continue
-                if not isinstance(node_output, dict):
-                    continue
+        def _render_live_diagram() -> None:
+            try:
+                mermaid_str = events_to_mermaid(get_builder().events)
+                html = (
+                    "<html><head>"
+                    "<script src='https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js'></script>"
+                    "<script>mermaid.initialize({startOnLoad:true,theme:'default'});</script>"
+                    "<style>body{margin:0;padding:4px;background:#fafafa;}.mermaid svg{max-width:100%;}</style>"
+                    "</head><body><div class='mermaid'>"
+                    + mermaid_str +
+                    "</div></body></html>"
+                )
+                with col_right:
+                    components.html(html, height=500, scrolling=True)
+            except Exception:
+                pass
 
-                _step += 1
-                _current_agent = node_name
+        def _render_trace_panel(agent: str) -> None:
+            icon = _AGENT_ICONS.get(agent, "🤖")
+            status_ph.markdown(f"**{icon} Agent actif :** `{agent}`")
+            if _tool_calls_seen:
+                tool_ph.markdown("**Outils :**\n" + "\n".join(f"- `{t}`" for t in _tool_calls_seen[-5:]))
+            if _all_files:
+                files_ph.markdown(
+                    f"**Fichiers ({len(_all_files)}) :**\n" +
+                    "\n".join(f"- `{f}`" for f in _all_files)
+                )
+            tokens_ph.markdown(
+                f"**Tokens** — in: `{_total_tokens['prompt']:,}` "
+                f"out: `{_total_tokens['completion']:,}` "
+                f"**total: `{_total_tokens['total']:,}`**"
+            )
+            step_ph.caption(f"Étape {_step}")
 
-                # Collect tool calls from AIMessages
-                msgs = node_output.get("messages", [])
-                for m in msgs:
-                    if isinstance(m, AIMessage):
-                        for tc in getattr(m, "tool_calls", None) or []:
-                            name = tc.get("name") if isinstance(tc, dict) else tc.name
-                            if name and name not in _tool_calls_seen:
-                                _tool_calls_seen.append(name)
+        try:
+            initial_state = {
+                "messages": [HumanMessage(content=prompt)],
+                "task": prompt,
+                "current_agent": "",
+                "files_written": [],
+                "awaiting_human": False,
+                "plan": None,
+                "arch_decision": None,
+                "review_result": None,
+                "test_result": None,
+                "writeup_done": False,
+                "dev_attempts": 0,
+                "token_usage": None,
+            }
 
-                # Track files written
-                new_files = node_output.get("files_written") or []
-                for f in new_files:
-                    if f not in _all_files:
-                        _all_files.append(f)
+            for chunk in graph.stream(initial_state, config=st.session_state.graph_config):
+                for node_name, node_output in chunk.items():
+                    if node_name in ("__end__", "__interrupt__") or not isinstance(node_output, dict):
+                        continue
 
-                # Accumulate token usage
-                usage = node_output.get("token_usage") or {}
-                _total_tokens["prompt"]     += usage.get("prompt_tokens", 0)
-                _total_tokens["completion"] += usage.get("completion_tokens", 0)
-                _total_tokens["total"]      += usage.get("total_tokens", 0)
+                    _step += 1
 
-                # Update trace panel
-                _render_trace(_current_agent, _tool_calls_seen, _all_files, _step)
+                    msgs = node_output.get("messages", [])
+                    for m in msgs:
+                        if isinstance(m, AIMessage):
+                            for tc in getattr(m, "tool_calls", None) or []:
+                                name = tc.get("name") if isinstance(tc, dict) else tc.name
+                                if name and name not in _tool_calls_seen:
+                                    _tool_calls_seen.append(name)
 
-                # Update Mermaid diagram from live tracer
-                try:
-                    _render_mermaid(get_tracer().to_mermaid())
-                except Exception:
-                    pass
+                    for f in node_output.get("files_written") or []:
+                        if f not in _all_files:
+                            _all_files.append(f)
 
-                # Collect assistant messages for chat history
-                for m in msgs:
-                    content = m.content if hasattr(m, "content") else str(m)
-                    if content and not isinstance(m, ToolMessage):
-                        st.session_state.messages.append(
-                            {"role": "assistant",
-                             "content": f"**[{node_name}]** {content}"}
-                        )
+                    usage = node_output.get("token_usage") or {}
+                    _total_tokens["prompt"]     += usage.get("prompt_tokens", 0)
+                    _total_tokens["completion"] += usage.get("completion_tokens", 0)
+                    _total_tokens["total"]      += usage.get("total_tokens", 0)
 
-    except Exception as exc:
-        st.session_state.messages.append(
-            {"role": "assistant", "content": f"**[error]** {exc}"}
+                    _render_trace_panel(node_name)
+                    _render_live_diagram()
+
+                    for m in msgs:
+                        content = m.content if hasattr(m, "content") else str(m)
+                        if content and not isinstance(m, ToolMessage):
+                            st.session_state.messages.append(
+                                {"role": "assistant", "content": f"**[{node_name}]** {content}"}
+                            )
+
+        except Exception as exc:
+            st.session_state.messages.append({"role": "assistant", "content": f"**[error]** {exc}"})
+
+        # ── Build and persist TraceRecord ──────────────────────────────────
+        try:
+            record = get_builder().build_record(files_written=_all_files)
+            st.session_state.last_record_json = record_to_json(record)
+            st.session_state.last_events = list(get_builder().events)
+            st.session_state.last_files = list(_all_files)
+            st.session_state.last_tokens = dict(_total_tokens)
+
+            # Save files
+            trace_dir = Path(WORKSPACE_DIR) / "traces"
+            short_id = st.session_state.thread_id[:8]
+            json_path = save_json(record, trace_dir / f"{short_id}_trace.json")
+            md_path = save_markdown(record, get_builder().events, trace_dir / f"{short_id}_trace.md", task=prompt)
+            _export_msg = f"Trace saved → `{json_path.name}` + `{md_path.name}`"
+        except Exception as exc:
+            _export_msg = f"Trace export failed: {exc}"
+
+        # ── Final diagram ──────────────────────────────────────────────────
+        _render_live_diagram()
+
+        status_ph.success(
+            f"Terminé — {_step} étape(s) · {len(_all_files)} fichier(s) · "
+            f"{_total_tokens['total']:,} tokens"
+        )
+        tool_ph.empty()
+        step_ph.caption(_export_msg)
+
+        st.rerun()
+
+# ===========================================================================
+# TAB 2 — Sequence Diagram
+# ===========================================================================
+
+with tab_diagram:
+    st.subheader("Sequence Diagram")
+
+    events = st.session_state.last_events
+    if not events:
+        st.info("Lancez une tâche dans l'onglet Chat pour voir le diagramme.")
+    else:
+        mermaid_str = events_to_mermaid(events)
+
+        # Download button
+        st.download_button(
+            "⬇ Télécharger .md",
+            data="```mermaid\n" + mermaid_str + "\n```",
+            file_name="sequence_diagram.md",
+            mime="text/markdown",
         )
 
-    # ── Final diagram render ───────────────────────────────────────────────
-    try:
-        _render_mermaid(get_tracer().to_mermaid())
-    except Exception:
-        pass
+        html = (
+            "<html><head>"
+            "<script src='https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js'></script>"
+            "<script>mermaid.initialize({startOnLoad:true,theme:'default',sequence:{useMaxWidth:false}});</script>"
+            "<style>body{margin:0;padding:8px;background:#fafafa;}.mermaid svg{max-width:100%;}</style>"
+            "</head><body><div class='mermaid'>"
+            + mermaid_str +
+            "</div></body></html>"
+        )
+        components.html(html, height=700, scrolling=True)
 
-    # ── Export trace to workspace/traces/<thread_id>_trace.md ─────────────
-    try:
-        from Config.team_agent.config import WORKSPACE_DIR
-        trace_dir = Path(WORKSPACE_DIR) / "traces"
-        trace_path = trace_dir / f"{st.session_state.thread_id[:8]}_trace.md"
-        saved_path = get_tracer().save_md(trace_path, task=prompt)
-        _trace_export_msg = f"Trace saved → `{saved_path}`"
-    except Exception as exc:
-        _trace_export_msg = f"Trace export failed: {exc}"
+        with st.expander("Source Mermaid"):
+            st.code(mermaid_str, language="text")
 
-    # ── Clear live trace panel, show summary ──────────────────────────────
-    status_placeholder.success(
-        f"Terminé — {_step} étape(s) · {len(_all_files)} fichier(s) · "
-        f"{_total_tokens['total']:,} tokens ({_total_tokens['prompt']:,} prompt + {_total_tokens['completion']:,} completion)"
-    )
-    tool_placeholder.empty()
-    progress_placeholder.caption(_trace_export_msg)
+# ===========================================================================
+# TAB 3 — Agent Trace Record (v1)
+# ===========================================================================
 
-    st.rerun()
+with tab_record:
+    st.subheader("Agent Trace Record — v1 specification")
+    st.caption("Format: [github.com/Velkasi/TracerIA](https://github.com/Velkasi/TracerIA)")
+
+    record_json = st.session_state.last_record_json
+    if not record_json:
+        st.info("Lancez une tâche dans l'onglet Chat pour générer un trace record.")
+    else:
+        record_dict = json.loads(record_json)
+
+        # ── Summary metrics ────────────────────────────────────────────────
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Fichiers attribués", len(record_dict.get("files", [])))
+        with col2:
+            total_ranges = sum(
+                len(c.get("ranges", []))
+                for f in record_dict.get("files", [])
+                for c in f.get("conversations", [])
+            )
+            st.metric("Ranges attribués", total_ranges)
+        with col3:
+            tok = st.session_state.last_tokens
+            st.metric("Tokens totaux", f"{tok['total']:,}")
+        with col4:
+            vcs = record_dict.get("vcs", {})
+            rev = vcs.get("revision", "—")
+            st.metric("Git SHA", rev[:12] if rev != "—" else "—")
+
+        st.divider()
+
+        # ── File attribution table ─────────────────────────────────────────
+        st.subheader("Attribution par fichier")
+
+        files = record_dict.get("files", [])
+        if files:
+            rows = []
+            for f in files:
+                for conv in f.get("conversations", []):
+                    contrib = conv.get("contributor", {})
+                    model_id = contrib.get("model_id") or contrib.get("type", "?")
+                    conv_url = conv.get("url", "—")
+                    for r in conv.get("ranges", []):
+                        ch = r.get("content_hash", "—")
+                        rows.append({
+                            "Fichier": f["path"],
+                            "Modèle": model_id,
+                            "Lignes": f"{r['start_line']}–{r['end_line']}",
+                            "Hash": ch[:24] + "…" if len(ch) > 24 else ch,
+                            "Conversation": conv_url,
+                        })
+            st.dataframe(rows, use_container_width=True)
+        else:
+            st.write("Aucun fichier attribué.")
+
+        st.divider()
+
+        # ── Token usage per agent ──────────────────────────────────────────
+        st.subheader("Tokens par agent")
+        token_summary = record_dict.get("metadata", {}).get("token_summary", {})
+        if token_summary:
+            token_rows = [
+                {
+                    "Agent": agent,
+                    "Modèle": data.get("model", "?"),
+                    "Appels LLM": data.get("calls", 0),
+                    "Prompt": data.get("prompt", 0),
+                    "Completion": data.get("completion", 0),
+                    "Total": data.get("total", 0),
+                }
+                for agent, data in token_summary.items()
+            ]
+            st.dataframe(token_rows, use_container_width=True)
+
+        st.divider()
+
+        # ── Raw JSON ───────────────────────────────────────────────────────
+        st.subheader("JSON brut (Agent Trace v1)")
+        st.download_button(
+            "⬇ Télécharger trace.json",
+            data=record_json,
+            file_name="agent_trace.json",
+            mime="application/json",
+        )
+        st.json(record_dict, expanded=2)
+
+# ===========================================================================
+# TAB 4 — Event Log
+# ===========================================================================
+
+with tab_log:
+    st.subheader("Full Event Log")
+
+    events = st.session_state.last_events
+    if not events:
+        st.info("Lancez une tâche dans l'onglet Chat pour voir le log d'événements.")
+    else:
+        # ── Filters ────────────────────────────────────────────────────────
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            all_agents = sorted({ev.agent for ev in events})
+            selected_agents = st.multiselect("Agents", all_agents, default=all_agents)
+        with col_f2:
+            all_kinds = sorted({ev.kind for ev in events})
+            selected_kinds = st.multiselect("Types d'événement", all_kinds, default=all_kinds)
+
+        filtered = [
+            ev for ev in events
+            if ev.agent in selected_agents and ev.kind in selected_kinds
+        ]
+
+        st.caption(f"{len(filtered)} / {len(events)} événements")
+
+        # ── Event rows ─────────────────────────────────────────────────────
+        _KIND_COLORS = {
+            "llm_call":        "🔵",
+            "llm_response":    "🟢",
+            "tool_call":       "🟡",
+            "tool_result":     "🟠",
+            "memory_op":       "🟣",
+            "supervisor_route":"🎯",
+            "agent_start":     "▶",
+            "agent_done":      "✅",
+            "error":           "❌",
+        }
+
+        for i, ev in enumerate(filtered, 1):
+            icon = _KIND_COLORS.get(ev.kind, "•")
+            p = ev.payload
+
+            # Build detail string
+            if ev.kind == "llm_call":
+                detail = (
+                    f"model=`{p.get('model','?')}` iter={p.get('iteration',1)} "
+                    f"| in={p.get('prompt_tokens',0):,} "
+                    f"out={p.get('completion_tokens',0):,} "
+                    f"tot={p.get('total_tokens',0):,}"
+                )
+            elif ev.kind == "llm_response":
+                detail = "+ tool_calls" if p.get("has_tool_calls") else "text only"
+            elif ev.kind == "tool_call":
+                detail = f"`{p.get('tool','?')}` — {p.get('args_summary','')}"
+            elif ev.kind == "tool_result":
+                detail = f"`{p.get('tool','?')}` → {p.get('result','')}"
+            elif ev.kind == "memory_op":
+                detail = f"`{p.get('operation','?')}` [{p.get('layer','?')}] {p.get('summary','')}"
+            elif ev.kind == "supervisor_route":
+                detail = f"→ `{p.get('target','?')}`"
+            elif ev.kind == "agent_done":
+                detail = f"{p.get('duration_ms',0):,}ms"
+            elif ev.kind == "error":
+                detail = p.get("message", "")
+            else:
+                detail = str(p)
+
+            st.markdown(
+                f"`{i:03d}` `{ev.ts}` {icon} **{ev.agent}** · `{ev.kind}`  \n"
+                f"&nbsp;&nbsp;&nbsp;&nbsp;{detail}"
+            )

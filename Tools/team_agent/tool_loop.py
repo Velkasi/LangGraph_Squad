@@ -8,8 +8,7 @@ import time
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
-from Graph.team_agent.tracer import TraceEvent, get_tracer
-import datetime as _dt
+from agent_trace import get_builder as get_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -300,12 +299,7 @@ def run_tool_loop(
             total_tokens=iter_total,
             iteration=_iter + 1,
         )
-        tracer.events.append(TraceEvent(
-            ts=_dt.datetime.now(_dt.timezone.utc).strftime("%H:%M:%S"),
-            event_type="llm_response",
-            agent=agent_name,
-            payload={"has_tool_calls": bool(tool_calls)},
-        ))
+        tracer.llm_response(agent_name, has_tool_calls=bool(tool_calls))
 
         new_messages.append(response)
         current_messages.append(response)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from Agents.team_agent.state import AgentState
-from Graph.team_agent.tracer import get_tracer
+from agent_trace import get_builder as get_tracer
 
 logger = logging.getLogger(__name__)
 
