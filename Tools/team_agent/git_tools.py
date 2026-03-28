@@ -20,6 +20,8 @@ def _git(args: list[str], check: bool = False) -> subprocess.CompletedProcess:
         cwd=str(_WORKSPACE),
         capture_output=True,
         text=True,
+        encoding='utf-8',
+        errors='replace',
         check=check,
         timeout=30,
     )
