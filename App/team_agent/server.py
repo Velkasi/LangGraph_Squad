@@ -86,6 +86,7 @@ async def websocket_run(ws: WebSocket):
 
     files: list[str] = []
     messages_out: list[dict] = []
+    messages_sent_idx: int = 0   # track how many messages already sent to client
     stream_error: str = ""
 
     # ── Run graph in background thread, consume via async queue ──────────────
@@ -134,8 +135,12 @@ async def websocket_run(ws: WebSocket):
             except Exception:
                 pass
 
-            log.info("STEP  node=%-14s events=%d msgs=%d files=%d",
-                     node, len(events_snap), len(messages_out), len(files))
+            # Only send NEW messages (not already sent in previous steps)
+            new_msgs = messages_out[messages_sent_idx:]
+            messages_sent_idx = len(messages_out)
+
+            log.info("STEP  node=%-14s events=%d new_msgs=%d files=%d",
+                     node, len(events_snap), len(new_msgs), len(files))
 
             try:
                 await ws.send_text(json.dumps({
@@ -145,7 +150,7 @@ async def websocket_run(ws: WebSocket):
                     "mermaid": mermaid_str,
                     "files": list(files),
                     "token_usage": out.get("token_usage") or {},
-                    "messages": list(messages_out),
+                    "messages": new_msgs,
                 }))
             except WebSocketDisconnect:
                 log.warning("Client disconnected during step")
