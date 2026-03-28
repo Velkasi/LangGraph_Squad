@@ -24,18 +24,21 @@ def supervisor_node(state: AgentState) -> dict:
     writeup_done = state.get("writeup_done") or False
     dev_attempts = state.get("dev_attempts") or 0
 
-    if not plan:
+    logger.info("Supervisor state — plan=%r arch=%r files=%r test=%r review=%r writeup=%r dev_attempts=%s",
+                bool(plan), bool(arch), len(files), test_result, bool(review), writeup_done, dev_attempts)
+
+    if plan is None:
         next_agent = "planner"
         reason     = "no plan yet"
-    elif not arch:
+    elif arch is None:
         next_agent = "architect"
         reason     = "plan exists, no architecture decision yet"
-    elif not files and dev_attempts >= 3:
+    elif len(files) == 0 and (dev_attempts or 0) >= 3:
         next_agent = "END"
         reason     = "dev failed 3 times without writing files — aborting"
-    elif not files:
+    elif len(files) == 0:
         next_agent = "dev"
-        reason     = f"architecture ready, no code written yet (attempt {dev_attempts + 1})"
+        reason     = f"architecture ready, no code written yet (attempt {(dev_attempts or 0) + 1})"
     elif test_result is None:
         next_agent = "test"
         reason     = "code written, not tested yet"

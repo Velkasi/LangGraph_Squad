@@ -61,13 +61,20 @@ def planner_node(state: AgentState) -> AgentState:
                     plan_text = content
                 break
 
+        plan = plan_text or "(plan defined)"
+        logger.info("planner_node done — plan=%r", plan[:60])
         return {
             "messages": new_messages,
             "current_agent": "planner",
-            "plan": plan_text or "",
+            "plan": plan,
             "awaiting_human": False,
             "token_usage": tokens,
         }
     except Exception as exc:
         logger.warning("planner_node failed: %s", exc)
-        return {"messages": [AIMessage(content=f"[planner] Error: {exc}")], "current_agent": "planner", "awaiting_human": False}
+        return {
+            "messages": [AIMessage(content=f"[planner] Error: {exc}")],
+            "current_agent": "planner",
+            "plan": f"(error: {exc})",
+            "awaiting_human": False,
+        }

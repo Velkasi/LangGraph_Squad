@@ -1,10 +1,7 @@
-## Architecture Decision
-**Stack:** React Native + Expo Router + Supabase + React Query + TypeScript
-**Structure:** DB + Auth + Hooks + Screens
-**Key decisions:**
-- Chaque fichier est immédiatement exécutable (pas de TODO bloquant)
-- Chaque hook : { data, isLoading, error } — jamais d’états partiels
-- Aucun écran n’appelle Supabase directement (tout passe par les hooks)
-
-## Tools
-write_file
+# Architecture document
+## Stack
+React Native, Expo Router, Supabase, React Query
+## Structure
+Application lanchain avec un VLM (Model de Versioning Logique) pour traiter un document et le stocker dans une base de données ChromaDB.
+## Key decisions
+Utilisation de React Native pour le frontend, Expo Router pour la navigation, Supabase pour la base de données et React Query pour les hooks de données.

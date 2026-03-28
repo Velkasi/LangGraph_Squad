@@ -68,13 +68,20 @@ def architect_node(state: AgentState) -> AgentState:
                     arch_text = content
                 break
 
+        decision = arch_text or "(architecture defined)"
+        logger.info("architect_node done — arch_decision=%r", decision[:60])
         return {
             "messages": new_messages,
             "current_agent": "architect",
-            "arch_decision": arch_text or "",
+            "arch_decision": decision,
             "awaiting_human": False,
             "token_usage": tokens,
         }
     except Exception as exc:
         logger.warning("architect_node failed: %s", exc)
-        return {"messages": [AIMessage(content=f"[architect] Error: {exc}")], "current_agent": "architect", "awaiting_human": False}
+        return {
+            "messages": [AIMessage(content=f"[architect] Error: {exc}")],
+            "current_agent": "architect",
+            "arch_decision": f"(error: {exc})",
+            "awaiting_human": False,
+        }
