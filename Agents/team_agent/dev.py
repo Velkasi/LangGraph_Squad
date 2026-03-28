@@ -37,7 +37,20 @@ Follow them strictly. Do not redesign the system.
 3. Use `run_shell` only for quick sanity checks.
 4. Use `git_diff` to review changes.
 5. Commit using `git_commit`.
-6. Log every created/modified file with `remember`.
+
+## Memory rules (STRICT)
+Use `remember` ONLY for:
+- A technical constraint discovered during implementation (e.g. "Package X requires Y as peer dep")
+- A decision that will affect future agents (e.g. "Auth uses JWT, not sessions")
+- A pattern established for this project (e.g. "All hooks follow pattern X")
+
+NEVER use `remember` for:
+- Confirming files were created ("Created file X")
+- Status updates ("Implementation complete")
+- Repeating what is already in the plan or arch_decision
+
+Use `commit_to_identity` ONLY for high-confidence cross-project preferences (confidence > 0.9).
+Use `recall` at the start to retrieve relevant constraints before coding.
 
 ## Constraints
 

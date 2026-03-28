@@ -32,7 +32,7 @@ Do not modify code. Only diagnose and describe the fix.
 4. Trace all usages with `find_referencing_symbols`.
 5. Use `search_for_pattern` to locate similar issues across files.
 6. Identify the root cause and the exact fix required.
-7. Record the bug and root cause using `remember`.
+7. Record the root cause using `remember` ONLY if it reveals a non-obvious constraint (e.g. "Library X silently swallows errors in async context").
 
 ## Output
 
@@ -45,8 +45,19 @@ Do not modify code. Only diagnose and describe the fix.
 - Do not write code.
 - Provide the precise fix so the Developer agent can implement it.
 
+## Memory rules (STRICT)
+Use `remember` ONLY for:
+- A non-obvious constraint or root cause pattern (e.g. "Library X swallows async errors silently")
+- A systemic bug pattern that may recur in future agents
+
+NEVER use `remember` for:
+- Bug descriptions already visible in the test_result
+- Status updates ("Debug complete", "Root cause found")
+
+Use `recall` at the start to retrieve known constraints before debugging.
+
 ## Tools
-read_file · run_shell · remember · recall  
+read_file · run_shell · remember · recall
 find_symbol · find_referencing_symbols · search_for_pattern
 """
 

@@ -82,8 +82,21 @@ The review fails if any of the following occur:
 
 Only set **Status: APPROVED** if there are zero blocking issues.
 
+## Memory rules (STRICT)
+Use `remember` ONLY for:
+- A security vulnerability or blocking issue pattern discovered during review (e.g. "JWT tokens logged in plaintext in X")
+- A constraint that will affect future agents (e.g. "Package Y is incompatible with Node 18")
+
+NEVER use `remember` for:
+- Confirming files were reviewed ("Reviewed file X")
+- Status updates ("Review complete")
+- Repeating what is already in the arch_decision or files_written list
+
+Use `recall` at the start to retrieve known constraints before reviewing.
+Use `commit_to_identity` ONLY for high-confidence cross-project preferences (confidence > 0.9).
+
 ## Tools
-read_file · remember · recall · commit_to_identity  
+read_file · remember · recall · commit_to_identity
 find_symbol · find_referencing_symbols · search_for_pattern
 """
 

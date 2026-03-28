@@ -165,7 +165,8 @@ def _inject_memory_context(messages: list, agent_name: str = "unknown") -> list:
             tracer = get_tracer()
             layers = set(d.metadata.get("layer", "?") for d in docs)
             tracer.memory_op(agent_name, "inject", "+".join(sorted(layers)),
-                             f"{len(docs)} docs injected")
+                             f"{len(docs)} docs injected",
+                             query=query, results_count=len(docs))
         except Exception:
             pass
 
@@ -292,14 +293,34 @@ def run_tool_loop(
 
         # ── Trace: LLM call ───────────────────────────────────────────────────
         tool_calls = getattr(response, "tool_calls", None) or []
+
+        # Build prompt preview from last non-system messages
+        prompt_preview = ""
+        try:
+            for m in reversed(trimmed):
+                c = m.content if isinstance(m.content, str) else str(m.content)
+                if c.strip() and not isinstance(m, SystemMessage):
+                    prompt_preview = c[:500]
+                    break
+        except Exception:
+            pass
+
+        response_preview = ""
+        try:
+            rc = response.content if isinstance(response.content, str) else str(response.content)
+            response_preview = rc[:500]
+        except Exception:
+            pass
+
         tracer.llm_call(
             agent_name, current_model,
             prompt_tokens=iter_prompt,
             completion_tokens=iter_completion,
             total_tokens=iter_total,
             iteration=_iter + 1,
+            prompt_preview=prompt_preview,
         )
-        tracer.llm_response(agent_name, has_tool_calls=bool(tool_calls))
+        tracer.llm_response(agent_name, has_tool_calls=bool(tool_calls), response_preview=response_preview)
 
         new_messages.append(response)
         current_messages.append(response)
@@ -321,8 +342,10 @@ def run_tool_loop(
             _is_memory_tool = tool_name in ("remember", "recall", "commit_to_identity")
             if _is_memory_tool:
                 layer = "L2+L3" if tool_name == "remember" else ("L4" if tool_name == "commit_to_identity" else "L3+L4")
+                mem_content = str(tool_args.get("content", tool_args.get("query", "")))
                 tracer.memory_op(agent_name, tool_name, layer,
-                                 str(tool_args.get("content", tool_args.get("query", "")))[:120])
+                                 mem_content[:200],
+                                 query=mem_content if tool_name == "recall" else "")
             else:
                 tracer.tool_call(agent_name, tool_name, tool_args)
 

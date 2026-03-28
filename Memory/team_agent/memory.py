@@ -179,16 +179,24 @@ def l4_search(query: str, k: int = 5) -> list[Document]:
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT content, category FROM memory_facts "
+                    "SELECT id, content, category FROM memory_facts "
                     "WHERE is_active = TRUE AND content ILIKE %s "
                     "ORDER BY (confidence * 0.5 + LEAST(usage_count, 20) * 0.025) DESC "
                     "LIMIT %s",
                     (f"%{query}%", k),
                 )
                 rows = cur.fetchall()
+                # Increment usage_count for returned facts
+                if rows:
+                    ids = [r[0] for r in rows]
+                    cur.execute(
+                        "UPDATE memory_facts SET usage_count = usage_count + 1, "
+                        "last_used = NOW() WHERE id = ANY(%s)",
+                        (ids,),
+                    )
         conn.close()
         return [
-            Document(page_content=r[0], metadata={"layer": "L4", "category": r[1]})
+            Document(page_content=r[1], metadata={"layer": "L4", "category": r[2]})
             for r in rows
         ]
     except Exception as exc:

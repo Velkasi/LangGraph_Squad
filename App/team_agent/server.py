@@ -18,6 +18,7 @@ log = logging.getLogger("server")
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from langchain_core.messages import HumanMessage, ToolMessage
 
 from Graph.team_agent.graph import graph
@@ -32,6 +33,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── In-memory result store: thread_id → done payload ─────────────────────────
+_results: dict[str, dict] = {}
+
+
+@app.get("/result/{thread_id}")
+async def get_result(thread_id: str):
+    if thread_id not in _results:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse(_results[thread_id])
 
 _SENTINEL = object()  # signals end of stream
 
@@ -184,17 +195,25 @@ async def websocket_run(ws: WebSocket):
     log.info("DONE  events=%d msgs=%d files=%d record_len=%d  export=%s",
              len(captured), len(messages_out), len(files), len(record_json), export_msg)
 
+    # Store full result for HTTP retrieval
+    _results[thread_id] = {
+        "events": _events_as_dicts(captured),
+        "mermaid": final_mermaid,
+        "record_json": record_json,
+        "messages": messages_out,
+        "files": files,
+        "export_msg": export_msg,
+    }
+
+    # Send lightweight done signal via WebSocket — client fetches full data via HTTP
     try:
         await ws.send_text(json.dumps({
             "type": "done",
-            "events": _events_as_dicts(captured),
-            "mermaid": final_mermaid,
-            "record_json": record_json,
-            "messages": messages_out,
-            "files": files,
+            "thread_id": thread_id,
             "export_msg": export_msg,
+            "event_count": len(captured),
         }))
-        log.info("DONE sent OK")
+        log.info("DONE sent OK — %d events stored for thread %s", len(captured), thread_id[:8])
     except WebSocketDisconnect:
         log.warning("Client disconnected before DONE could be sent")
     except Exception as exc:

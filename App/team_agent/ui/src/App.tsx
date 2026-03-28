@@ -118,6 +118,7 @@ export default function App() {
   const [threadId] = useState(() => crypto.randomUUID())
   const [filterAgents, setFilterAgents] = useState<string[]>([])
   const [filterKinds, setFilterKinds] = useState<string[]>([])
+  const [expandedEvent, setExpandedEvent] = useState<number | null>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
   const liveTokensRef = useRef(liveTokens)
   liveTokensRef.current = liveTokens
@@ -160,7 +161,8 @@ export default function App() {
           completion: prev.completion + (Number(u.completion_tokens) || 0),
           total:      prev.total      + (Number(u.total_tokens)      || 0),
         }))
-        const toolCalls = (msg.events as TraceEvent[] ?? [])
+        const events: TraceEvent[] = msg.events ?? []
+        const toolCalls = events
           .filter(e => e.kind === 'tool_call')
           .map(e => String(e.payload.tool ?? ''))
           .filter(Boolean)
@@ -168,23 +170,41 @@ export default function App() {
         for (const m of msg.messages ?? []) {
           setChatMessages(prev => [...prev, m as Message])
         }
+        // Update trace tabs live with cumulative events from each step
+        if (events.length > 0) {
+          setRunState(prev => ({
+            events,
+            mermaid: msg.mermaid ?? '',
+            recordJson: prev?.recordJson ?? '',
+            messages: prev?.messages ?? [],
+            files: msg.files ?? [],
+            tokens: liveTokensRef.current,
+            exportMsg: prev?.exportMsg ?? '',
+          }))
+        }
       }
 
       if (msg.type === 'done') {
-        const events: TraceEvent[] = msg.events ?? []
-        console.log('[WS] done — events:', events.length, 'mermaid:', msg.mermaid?.length, 'record:', msg.record_json?.length, 'export:', msg.export_msg)
-        setRunState({
-          events,
-          mermaid: msg.mermaid ?? '',
-          recordJson: msg.record_json ?? '',
-          messages: msg.messages ?? [],
-          files: msg.files ?? [],
-          tokens: liveTokensRef.current,
-          exportMsg: msg.export_msg ?? '',
-        })
-        setRunning(false)
-        setFilterAgents([])
-        setFilterKinds([])
+        console.log('[WS] done signal — thread:', msg.thread_id, 'events:', msg.event_count, 'export:', msg.export_msg)
+        // Fetch full result via HTTP to avoid WebSocket buffer limits
+        fetch(`/result/${msg.thread_id}`)
+          .then(r => r.json())
+          .then(data => {
+            console.log('[HTTP] result — events:', data.events?.length, 'mermaid:', data.mermaid?.length, 'record:', data.record_json?.length)
+            setRunState({
+              events: data.events ?? [],
+              mermaid: data.mermaid ?? '',
+              recordJson: data.record_json ?? '',
+              messages: data.messages ?? [],
+              files: data.files ?? [],
+              tokens: liveTokensRef.current,
+              exportMsg: data.export_msg ?? '',
+            })
+            setFilterAgents([])
+            setFilterKinds([])
+          })
+          .catch(err => console.error('[HTTP] result fetch failed:', err))
+          .finally(() => setRunning(false))
       }
 
       if (msg.type === 'error') {
@@ -442,22 +462,45 @@ export default function App() {
                     {filteredEvents.map((ev, i) => {
                       const p = ev.payload
                       let detail = ''
-                      if (ev.kind === 'llm_call') detail = `model=${p.model} | in=${Number(p.prompt_tokens??0).toLocaleString()} out=${Number(p.completion_tokens??0).toLocaleString()} tot=${Number(p.total_tokens??0).toLocaleString()}`
-                      else if (ev.kind === 'llm_response') detail = p.has_tool_calls ? '+tools' : 'text only'
+                      if (ev.kind === 'llm_call') {
+                        detail = `${p.model} | iter=${p.iteration} | in=${Number(p.prompt_tokens??0).toLocaleString()} out=${Number(p.completion_tokens??0).toLocaleString()} tot=${Number(p.total_tokens??0).toLocaleString()}`
+                        if (p.prompt_preview) detail += ` | "${String(p.prompt_preview).slice(0,60)}…"`
+                      }
+                      else if (ev.kind === 'llm_response') {
+                        detail = p.has_tool_calls ? '→ tool calls' : 'text'
+                        if (p.response_preview) detail += ` | "${String(p.response_preview).slice(0,80)}…"`
+                      }
                       else if (ev.kind === 'tool_call') detail = `${p.tool} — ${p.args_summary ?? ''}`
-                      else if (ev.kind === 'tool_result') detail = `${p.tool} → ${String(p.result ?? '').slice(0, 80)}`
-                      else if (ev.kind === 'memory_op') detail = `${p.operation} [${p.layer}] ${p.summary ?? ''}`
+                      else if (ev.kind === 'tool_result') detail = `${p.tool} → ${String(p.result ?? '').slice(0, 100)}`
+                      else if (ev.kind === 'memory_op') {
+                        detail = `${p.operation} [${p.layer}]`
+                        if (p.query) detail += ` query="${String(p.query).slice(0,60)}"`
+                        if (p.results_count) detail += ` → ${p.results_count} docs`
+                        if (p.summary && !p.query) detail += ` ${String(p.summary).slice(0,80)}`
+                      }
                       else if (ev.kind === 'supervisor_route') detail = `→ ${p.target}`
-                      else if (ev.kind === 'agent_done') detail = `${p.duration_ms}ms`
+                      else if (ev.kind === 'agent_done') detail = `${Number(p.duration_ms).toLocaleString()}ms`
                       else if (ev.kind === 'error') detail = String(p.message ?? '')
+                      const isExpanded = expandedEvent === i
                       return (
-                        <div key={i} className="flex gap-3 text-xs font-mono py-1 border-b border-gray-900 hover:bg-gray-900 px-2 rounded">
-                          <span className="text-gray-600 w-8 shrink-0">{String(i+1).padStart(3,'0')}</span>
-                          <span className="text-gray-600 w-20 shrink-0">{ev.ts}</span>
-                          <span className="w-5 shrink-0">{KIND_ICONS[ev.kind] ?? '•'}</span>
-                          <span className="text-purple-400 w-24 shrink-0">{ev.agent}</span>
-                          <span className="text-blue-400 w-28 shrink-0">{ev.kind}</span>
-                          <span className="text-gray-400 truncate">{detail}</span>
+                        <div key={i} className="border-b border-gray-900">
+                          <div
+                            className="flex gap-3 text-xs font-mono py-1 hover:bg-gray-900 px-2 rounded cursor-pointer"
+                            onClick={() => setExpandedEvent(isExpanded ? null : i)}
+                          >
+                            <span className="text-gray-600 w-8 shrink-0">{String(i+1).padStart(3,'0')}</span>
+                            <span className="text-gray-600 w-20 shrink-0">{ev.ts}</span>
+                            <span className="w-5 shrink-0">{KIND_ICONS[ev.kind] ?? '•'}</span>
+                            <span className="text-purple-400 w-24 shrink-0">{ev.agent}</span>
+                            <span className="text-blue-400 w-28 shrink-0">{ev.kind}</span>
+                            <span className="text-gray-400 flex-1 truncate">{detail}</span>
+                            <span className="text-gray-600 shrink-0">{isExpanded ? '▲' : '▼'}</span>
+                          </div>
+                          {isExpanded && (
+                            <div className="mx-2 mb-2 bg-gray-950 rounded p-3 text-xs font-mono text-gray-300 overflow-auto max-h-96 whitespace-pre-wrap break-all">
+                              {JSON.stringify(ev.payload, null, 2)}
+                            </div>
+                          )}
                         </div>
                       )
                     })}
