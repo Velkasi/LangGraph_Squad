@@ -42,11 +42,11 @@ def run_shell(command: str) -> str:
             shell=True,
             cwd=str(_WORKSPACE),
             capture_output=True,
-            text=True,
+            text=False,
             timeout=SHELL_TIMEOUT_SECONDS,
         )
-        output = result.stdout or ""
-        errors = result.stderr or ""
+        output = (result.stdout or b"").decode("utf-8", errors="replace")
+        errors = (result.stderr or b"").decode("utf-8", errors="replace")
         combined = (output + ("\n[stderr]\n" + errors if errors else "")).strip()
         return combined if combined else f"(exit code {result.returncode}, no output)"
     except subprocess.TimeoutExpired:
