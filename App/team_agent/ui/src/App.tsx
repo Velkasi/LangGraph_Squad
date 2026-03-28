@@ -172,6 +172,7 @@ export default function App() {
 
       if (msg.type === 'done') {
         const events: TraceEvent[] = msg.events ?? []
+        console.log('[WS] done — events:', events.length, 'mermaid:', msg.mermaid?.length, 'record:', msg.record_json?.length, 'export:', msg.export_msg)
         setRunState({
           events,
           mermaid: msg.mermaid ?? '',
