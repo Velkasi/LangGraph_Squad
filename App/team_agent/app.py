@@ -340,9 +340,9 @@ with tab_record:
             st.metric("Fichiers attribués", len(record_dict.get("files", [])))
         with col2:
             total_ranges = sum(
-                len(c.get("ranges", []))
+                len(s.get("ranges", []))
                 for f in record_dict.get("files", [])
-                for c in f.get("conversations", [])
+                for s in f.get("sessions", [])
             )
             st.metric("Ranges attribués", total_ranges)
         with col3:
@@ -362,18 +362,17 @@ with tab_record:
         if files:
             rows = []
             for f in files:
-                for conv in f.get("conversations", []):
-                    contrib = conv.get("contributor", {})
-                    model_id = contrib.get("model_id") or contrib.get("type", "?")
-                    conv_url = conv.get("url", "—")
-                    for r in conv.get("ranges", []):
-                        ch = r.get("content_hash", "—")
+                for sess in f.get("sessions", []):
+                    agent    = sess.get("agent", "?")
+                    model_id = sess.get("model", "?")
+                    for r in sess.get("ranges", []):
+                        ch = r.get("content_hash", "—") or "—"
                         rows.append({
                             "Fichier": f["path"],
-                            "Modèle": model_id,
-                            "Lignes": f"{r['start_line']}–{r['end_line']}",
-                            "Hash": ch[:24] + "…" if len(ch) > 24 else ch,
-                            "Conversation": conv_url,
+                            "Agent":   agent,
+                            "Modèle":  model_id,
+                            "Lignes":  f"{r['start_line']}–{r['end_line']}",
+                            "Hash":    ch[:24] + "…" if len(ch) > 24 else ch,
                         })
             st.dataframe(rows, use_container_width=True)
         else:
