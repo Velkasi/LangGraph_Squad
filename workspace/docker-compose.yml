@@ -1,0 +1,111 @@
+version: '3.8'
+
+services:
+  supabase-db:
+    image: 'supabase/postgres:15.3.0.85'
+    container_name: supabase-db
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=postgres
+    ports:
+      - '54321:5432'
+    volumes:
+      - supabase_db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  supabase-kong:
+    image: 'supabase/kong:1.4.1'
+    container_name: supabase-kong
+    depends_on:
+      - supabase-db
+      - supabase-auth-listener
+      - supabase-edge-runtime
+    environment:
+      - KONG_LOG_LEVEL=info
+      - KONG_WARN_INSECURE_ADMIN_ACCESS=on
+      - KONG_ADMIN_GUI_URL=http://localhost:54323
+      - KONG_PG_HOST=supabase-db
+      - KONG_PG_PASSWORD=postgres
+      - GATSBY_REST_URL=http://supabase-kong:8000/rest/v1/
+      - GATSBY_HASURA_GRAPHQL_URL=http://supabase-graphql:8080/v1/graphql
+      - GATSBY_HASURA_GRAPHQL_ADMIN_SECRET=graphql-admin-secret
+    ports:
+      - '8000:8000'
+      - '8001:8001'
+    restart: unless-stopped
+
+  supabase-auth-listener:
+    image: 'supabase/postgres-auth:latest'
+    container_name: supabase-auth-listener
+    depends_on:
+      - supabase-db
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=postgres
+    command: ["--decode-signature=false"]
+    restart: unless-stopped
+
+  supabase-realtime:
+    image: 'supabase/postgres-realtime:2.5.0'
+    container_name: supabase-realtime
+    depends_on:
+      - supabase-db
+    environment:
+      - DB_HOST=supabase-db
+      - DB_USER=supabase_user
+      - DB_PASSWORD=supabase_password
+      - DB_NAME=supabase_meta
+      - DB_PORT=5432
+      - DB_AFTER_CHANGE_WEBHOOK_URL=https://supabase-kong:8000/functions/v1/webhook
+    ports:
+      - '4000:4000'
+    restart: unless-stopped
+
+  supabase-storage:
+    image: 'supabase/storage-api:1.8.1'
+    container_name: supabase-storage
+    depends_on:
+      - supabase-db
+    environment:
+      - POSTGRES_DB=postgres
+      - POSTGRES_SCHEMA=storage
+      - POSTGRES_USER=supabase_user
+      - POSTGRES_PASSWORD=supabase_password
+      - PGBACKREST_DB_HOST=supabase-db
+      - PGBACKREST_REPO_PATH=/backups
+      - PGBACKREST_DB_PATH=/var/lib/postgresql/data
+      - TUS_GCS_BUCKET=
+      - TUS_S3_BUCKET=
+      - TUS_AZURE_CONTAINER_NAME=
+    restart: unless-stopped
+
+  supabase-graphql:
+    image: 'hasura/graphql-engine:v2.10.1'
+    container_name: supabase-graphql
+    depends_on:
+      - supabase-db
+    environment:
+      - HASURA_GRAPHQL_DATABASE_URL=postgresql://postgres:postgres@supabase-db:5432/postgres
+      - HASURA_GRAPHQL_ENABLE_CONSOLE=false
+      - HASURA_GRAPHQL_DEV_MODE=true
+      - HASURA_GRAPHQL_ENABLED_LOG_TYPES=startup, http-log, webhook-log, websocket-log, query-log
+      - HASURA_GRAPHQL_ADMIN_SECRET=graphql-admin-secret
+      - HASURA_GRAPHQL_JWT_SECRET={}\n    restart: unless-stopped
+
+  supabase-edge-runtime:
+    image: 'supabase/postgres-edge-runtime:0.11.8'
+    container_name: supabase-edge-runtime
+    depends_on:
+      - supabase-db
+    environment:
+      - DB_HOST=supabase-db
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_PORT=5432
+      - RETRON_ENABLED=false
+    restart: unless-stopped
+
+volumes:
+  supabase_db_data:
+    driver: local

@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, sans-serif; background: #0f1117; color: #e2e8f0; }
+
+/* Markdown rendering in chat bubbles */
+.md-content { font-size: 0.875rem; line-height: 1.6; }
+.md-content p { margin: 0 0 0.5rem; }
+.md-content p:last-child { margin-bottom: 0; }
+.md-content h1, .md-content h2, .md-content h3 { font-weight: 600; margin: 0.75rem 0 0.25rem; }
+.md-content h1 { font-size: 1.1rem; }
+.md-content h2 { font-size: 1rem; }
+.md-content h3 { font-size: 0.9rem; }
+.md-content ul, .md-content ol { padding-left: 1.25rem; margin: 0.25rem 0 0.5rem; }
+.md-content li { margin: 0.1rem 0; }
+.md-content code { background: rgba(0,0,0,0.35); padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.8rem; font-family: 'Consolas', 'Fira Code', monospace; }
+.md-content pre { background: rgba(0,0,0,0.4); border-radius: 6px; padding: 0.75rem; overflow-x: auto; margin: 0.5rem 0; }
+.md-content pre code { background: none; padding: 0; font-size: 0.8rem; }
+.md-content blockquote { border-left: 3px solid #6b7280; padding-left: 0.75rem; margin: 0.5rem 0; color: #9ca3af; }
+.md-content strong { font-weight: 600; }
+.md-content em { font-style: italic; }
+.md-content hr { border: none; border-top: 1px solid #374151; margin: 0.5rem 0; }
+.md-content a { color: #a78bfa; text-decoration: underline; }

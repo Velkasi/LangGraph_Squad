@@ -1,48 +1,75 @@
 # Agentic Architect
 
-Système multi-agents IA (LangGraph) avec mémoire persistante, piloté via Streamlit.
+Système multi-agents IA (LangGraph) avec mémoire persistante, interface React + FastAPI WebSocket.
 
 ---
 
-## Prérequis
+## Prérequis système
 
-- Python 3.11+
-- Docker & Docker Compose
-- Une clé API OpenAI-compatible
+Installer **uniquement** ces deux outils sur la machine — tout le reste (Node.js, npm, packages Python) vit dans le venv :
+
+| Outil | Pourquoi |
+|---|---|
+| Python 3.11+ | Runtime pour créer le venv |
+| Docker & Docker Compose | Bases de données (Redis, ChromaDB, PostgreSQL) |
 
 ---
 
-## Configuration
+## Installation (une seule fois)
 
-### 1. Variables d'environnement
+### 1. Créer le venv Python
 
-Copie `.env.example` en `.env` et renseigne les valeurs :
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 2. Installer Node.js dans le venv
+
+Node.js et npm sont isolés dans le venv via `nodeenv` — **rien n'est installé globalement**.
+
+```bash
+.venv\Scripts\pip install nodeenv
+.venv\Scripts\nodeenv --node=22.14.0 --prebuilt .venv\node
+```
+
+### 3. Installer les dépendances frontend
+
+```bash
+cd App\team_agent\ui
+..\..\..\..\.venv\node\Scripts\npm.cmd install
+cd ..\..\..
+```
+
+### 4. Variables d'environnement
+
+Copie `.env.example` en `.env` et renseigne :
 
 ```env
 # API principale (OpenAI-compatible)
-OPENAI_API_KEY="sk-..."
+Cerebras_API_KEY="csk-..."
+# ou
+OpenRouter_API_KEY="sk-or-..."
 
-# Météo (optionnel)
-OPENWEATHER_API_KEY="..."
-
-# Mémoire — laisser par défaut si tu utilises docker-compose
+# Mémoire — laisser par défaut avec docker-compose
 REDIS_URL=redis://localhost:6379
 CHROMA_HOST=localhost
-CHROMA_PORT=8000
+CHROMA_PORT=8002
 PG_DSN=postgresql://planner:planner_secret@localhost:5432/planner_memory
 ```
 
-### 2. Modèles
+### 5. Modèles
 
 Dans [Config/team_agent/config.py](Config/team_agent/config.py) :
 
 ```python
-SIMPLE_MODEL   = "qwen/qwen3-32b"       # tâches simples  (supervisor, test, debug, writeup, reviewer)
-COMPLEX_MODEL  = "openai/gpt-oss-120b"  # tâches complexes (planner, architect, dev, analyst)
-MODEL_PROVIDER = "openai"               # même provider pour les deux
+SIMPLE_MODEL   = "llama3.1-8b"                    # tâches légères
+COMPLEX_MODEL  = "qwen-3-235b-a22b-instruct-2507" # tâches complexes
+MODEL_PROVIDER = "openai"                          # API OpenAI-compatible
 ```
 
-### 3. Autres paramètres disponibles
+### Autres paramètres disponibles
 
 | Variable | Défaut | Description |
 |---|---|---|
@@ -62,31 +89,32 @@ MODEL_PROVIDER = "openai"               # même provider pour les deux
 docker-compose up -d
 ```
 
-Lance Redis (port 6379), ChromaDB (port 8000) et PostgreSQL (port 5432).
+Lance Redis (6379), ChromaDB (8000), PostgreSQL (5432).
 
-### 2. Installer les dépendances Python
+### 2. Démarrer l'application
 
-```bash
-pip install -r requirements.txt
+```bat
+start.bat    # Lance le backend FastAPI + le frontend React
+stop.bat     # Arrête tout
 ```
 
-### 3. Lancer l'interface
-
-```bash
-streamlit run App/team_agent/app.py
-```
+- Backend API : http://localhost:8000
+- Frontend UI : http://localhost:5173
 
 ---
 
 ## Architecture
 
 ```
-Agents/          → 9 agents spécialisés (planner, architect, dev, analyst, reviewer, debug, test, writeup, supervisor)
-Config/          → Configuration centralisée
-Graph/           → Définition du graphe LangGraph
-Memory/          → Backends mémoire (L2 Redis, L3 ChromaDB, L4 PostgreSQL)
-Tools/           → Outils partagés (fichiers, git, shell, mémoire)
-App/             → Interface Streamlit
+Agents/              → 9 agents (planner, architect, dev, reviewer, test, debug, writeup, analyst, supervisor)
+Config/              → Configuration centralisée
+Graph/               → Graphe LangGraph
+Memory/              → Backends mémoire (L2 Redis, L3 ChromaDB, L4 PostgreSQL)
+Tools/               → Outils partagés (fichiers, git, shell, mémoire)
+App/
+  team_agent/
+    server.py        → Backend FastAPI WebSocket
+    ui/              → Frontend React + Vite + Tailwind
 ```
 
 ### Couches mémoire
@@ -96,3 +124,15 @@ App/             → Interface Streamlit
 | L2 | Redis | Mémoire de session (TTL 24h) |
 | L3 | ChromaDB | Mémoire long-terme sémantique |
 | L4 | PostgreSQL | Identité et décisions persistantes |
+
+### Interface
+
+L'UI React se connecte au backend via WebSocket (`ws://localhost:8000/ws`).
+Les events du graphe LangGraph sont streamés en temps réel vers 4 onglets :
+
+| Onglet | Contenu |
+|---|---|
+| 💬 Chat | Messages des agents + live trace pendant le run |
+| 📊 Sequence Diagram | Diagramme Mermaid de la séquence d'agents |
+| 🔬 Agent Trace (v1) | Record JSON complet (tokens, fichiers, git SHA) |
+| 📋 Event Log | Log filtrable de tous les events LangGraph |
