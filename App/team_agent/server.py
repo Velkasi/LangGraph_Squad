@@ -9,17 +9,16 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 import asyncio
 import json
 import logging
+import threading
 import uuid
 from pathlib import Path
-from typing import AsyncGenerator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-8s %(message)s")
 log = logging.getLogger("server")
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 
 from Graph.team_agent.graph import graph
 from agent_trace import get_builder, reset_builder, to_json as record_to_json, save_json, save_markdown
@@ -34,14 +33,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_SENTINEL = object()  # signals end of stream
+
 
 def _events_as_dicts(events) -> list[dict]:
     return [{"ts": e.ts, "kind": e.kind, "agent": e.agent, "payload": e.payload} for e in events]
 
 
+def _run_graph_in_thread(init: dict, config: dict, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+    """Run graph.stream() synchronously in a thread, pushing chunks into the async queue."""
+    try:
+        for chunk in graph.stream(init, config=config):
+            asyncio.run_coroutine_threadsafe(queue.put(("chunk", chunk)), loop).result()
+    except Exception as exc:
+        asyncio.run_coroutine_threadsafe(queue.put(("error", exc)), loop).result()
+    finally:
+        asyncio.run_coroutine_threadsafe(queue.put(("done", None)), loop).result()
+
+
 @app.websocket("/ws")
 async def websocket_run(ws: WebSocket):
     await ws.accept()
+    log.info("WebSocket accepted")
 
     try:
         raw = await ws.receive_text()
@@ -50,15 +63,16 @@ async def websocket_run(ws: WebSocket):
         thread_id = data.get("thread_id", str(uuid.uuid4()))
     except Exception as exc:
         await ws.send_text(json.dumps({"type": "error", "message": str(exc)}))
-        await ws.close()
         return
+
+    log.info("Run start — prompt=%r thread=%s", prompt[:80], thread_id[:8])
 
     from Config.team_agent.config import WORKSPACE_DIR
 
     reset_builder(
         workspace_dir=WORKSPACE_DIR,
         task=prompt,
-        session_id=f"ws://session/{thread_id}",
+        session_id=f"ws://{thread_id}",
     )
 
     config = {"configurable": {"thread_id": thread_id}}
@@ -72,37 +86,58 @@ async def websocket_run(ws: WebSocket):
 
     files: list[str] = []
     messages_out: list[dict] = []
-
     stream_error: str = ""
-    try:
-        for chunk in graph.stream(init, config=config):
-            for node, out in chunk.items():
-                if node in ("__end__", "__interrupt__") or not isinstance(out, dict):
-                    continue
 
-                # Collect files
-                for f in out.get("files_written") or []:
-                    if f not in files:
-                        files.append(f)
+    # ── Run graph in background thread, consume via async queue ──────────────
+    queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_event_loop()
+    thread = threading.Thread(
+        target=_run_graph_in_thread, args=(init, config, queue, loop), daemon=True
+    )
+    thread.start()
 
-                # Collect assistant messages
-                for m in out.get("messages", []):
-                    c = m.content if hasattr(m, "content") else str(m)
-                    if c and not isinstance(m, ToolMessage):
-                        messages_out.append({"role": "assistant", "node": node, "content": c})
+    while True:
+        kind, payload = await queue.get()
 
-                # Stream current events snapshot after each node
-                events_snap = _events_as_dicts(get_builder().events)
-                mermaid_str = ""
-                try:
-                    mermaid_str = events_to_mermaid(get_builder().events)
-                except Exception:
-                    pass
+        if kind == "error":
+            stream_error = str(payload)
+            log.error("graph.stream error: %s", payload, exc_info=payload)
+            try:
+                await ws.send_text(json.dumps({"type": "error", "message": stream_error}))
+            except Exception:
+                pass
+            break
 
-                log.info("STEP node=%-14s events=%d msgs=%d files=%d tokens=%s",
-                         node, len(events_snap), len(messages_out), len(files),
-                         out.get("token_usage") or {})
+        if kind == "done":
+            log.info("graph.stream finished")
+            break
 
+        # kind == "chunk"
+        chunk = payload
+        for node, out in chunk.items():
+            if node in ("__end__", "__interrupt__") or not isinstance(out, dict):
+                continue
+
+            for f in out.get("files_written") or []:
+                if f not in files:
+                    files.append(f)
+
+            for m in out.get("messages", []):
+                c = m.content if hasattr(m, "content") else str(m)
+                if c and not isinstance(m, ToolMessage):
+                    messages_out.append({"role": "assistant", "node": node, "content": c})
+
+            events_snap = _events_as_dicts(get_builder().events)
+            mermaid_str = ""
+            try:
+                mermaid_str = events_to_mermaid(get_builder().events)
+            except Exception:
+                pass
+
+            log.info("STEP  node=%-14s events=%d msgs=%d files=%d",
+                     node, len(events_snap), len(messages_out), len(files))
+
+            try:
                 await ws.send_text(json.dumps({
                     "type": "step",
                     "node": node,
@@ -112,18 +147,13 @@ async def websocket_run(ws: WebSocket):
                     "token_usage": out.get("token_usage") or {},
                     "messages": list(messages_out),
                 }))
+            except WebSocketDisconnect:
+                log.warning("Client disconnected during step")
+                return
 
-                await asyncio.sleep(0)
+    thread.join(timeout=5)
 
-    except BaseException as exc:
-        stream_error = str(exc)
-        log.error("graph.stream error: %s", exc, exc_info=True)
-        try:
-            await ws.send_text(json.dumps({"type": "error", "message": stream_error}))
-        except Exception:
-            pass
-
-    # Final — build record and send done (always, even after error)
+    # ── Build final record ────────────────────────────────────────────────────
     captured = list(get_builder().events)
     record_json = ""
     export_msg = f"{len(captured)} événements capturés"
@@ -146,22 +176,21 @@ async def websocket_run(ws: WebSocket):
     except Exception:
         pass
 
-    log.info("DONE  events=%d msgs=%d files=%d record_json_len=%d export=%s",
+    log.info("DONE  events=%d msgs=%d files=%d record_len=%d  export=%s",
              len(captured), len(messages_out), len(files), len(record_json), export_msg)
 
-    done_payload = {
-        "type": "done",
-        "events": _events_as_dicts(captured),
-        "mermaid": final_mermaid,
-        "record_json": record_json,
-        "messages": messages_out,
-        "files": files,
-        "export_msg": export_msg,
-    }
     try:
-        await ws.send_text(json.dumps(done_payload))
-        log.info("DONE sent — events=%d mermaid=%d record=%d",
-                 len(done_payload["events"]), len(done_payload["mermaid"]),
-                 len(done_payload["record_json"]))
+        await ws.send_text(json.dumps({
+            "type": "done",
+            "events": _events_as_dicts(captured),
+            "mermaid": final_mermaid,
+            "record_json": record_json,
+            "messages": messages_out,
+            "files": files,
+            "export_msg": export_msg,
+        }))
+        log.info("DONE sent OK")
+    except WebSocketDisconnect:
+        log.warning("Client disconnected before DONE could be sent")
     except Exception as exc:
         log.error("Failed to send DONE: %s", exc)
