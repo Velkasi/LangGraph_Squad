@@ -1,35 +1,40 @@
 # Application Architecture Design
 
 ## Overview
-This application is a React Native mobile app built with Expo Router for navigation, Supabase for backend services, and React Query for data management. The app follows a modular structure with clear separation of concerns between UI components, data hooks, and business logic.
+This application is built using React Native with Expo Router for navigation, Supabase for database and authentication, and React Query for data fetching and state management. The stack is TypeScript-based for type safety.
 
-## Stack
-- **Frontend**: React Native + Expo
-- **Navigation**: Expo Router (app/ directory structure)
-- **State/Data**: React Query for API data, React local state for UI
-- **Backend**: Supabase (PostgreSQL, Auth, Storage)
-- **Styling**: React Native StyleSheet
-- **Language**: TypeScript
+## Directory Structure
+- `app/`: Contains all screens and layout files using Expo Router
+  - `_layout.tsx`: Root layout with Stack navigator
+  - `index.tsx`: Main screen displaying content
+- `components/`: Reusable UI components
+- `lib/`: Shared logic, hooks, and utilities
+- `types/`: TypeScript interfaces and types
 
-## Project Structure
-```
-app/
-├─ _layout.tsx        # Root layout with providers
-├─ index.tsx          # Main screen / entry point
-components/           # Reusable UI components
-hooks/                # Custom React hooks
-lib/                  # Utilities, config, Supabase client
-types/                # TypeScript interfaces
-```
+## Navigation
+Expo Router is used with file-based routing. The `_layout.tsx` file defines the root stack navigator, and screens are automatically registered based on file names.
 
 ## Data Flow
-1. Supabase provides database, authentication, and storage
-2. Custom hooks (using React Query) fetch and mutate data from Supabase
-3. Screens consume hooks to display data and handle user actions
-4. Components are reusable UI elements used across screens
+1. Data is stored in Supabase PostgreSQL database
+2. React Query hooks in `lib/` fetch and manage data
+3. Screens consume data through these hooks
+4. UI updates automatically via React Query's caching and refetching
 
-## Key Decisions
-- **Expo Router**: Modern file-based routing, easy navigation
-- **React Query**: Powerful caching, synchronization, and data fetching
-- **Supabase**: Open-source Firebase alternative with PostgreSQL
-- **TypeScript**: Type safety across frontend and backend interfaces
+## State Management
+- Local state: React useState/useReducer
+- Server state: React Query
+- Authentication state: Supabase Auth + React Query
+
+## Styling
+- React Native StyleSheet for component styling
+- Flexible layout using Flexbox
+- Responsive design principles
+
+## Environment Configuration
+- Environment variables defined in `.env.example`
+- Docker Compose for local development with Supabase
+
+## Testing
+- Unit tests for components and hooks
+- Integration tests for data flow
+- E2E tests for critical user journeys
