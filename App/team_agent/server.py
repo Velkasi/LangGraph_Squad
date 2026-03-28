@@ -73,6 +73,7 @@ async def websocket_run(ws: WebSocket):
     files: list[str] = []
     messages_out: list[dict] = []
 
+    stream_error: str = ""
     try:
         for chunk in graph.stream(init, config=config):
             for node, out in chunk.items():
@@ -109,17 +110,20 @@ async def websocket_run(ws: WebSocket):
                     "mermaid": mermaid_str,
                     "files": list(files),
                     "token_usage": out.get("token_usage") or {},
-                    "messages": [m for m in messages_out],
+                    "messages": list(messages_out),
                 }))
 
-                # Yield control so the event loop can flush
                 await asyncio.sleep(0)
 
-    except Exception as exc:
+    except BaseException as exc:
+        stream_error = str(exc)
         log.error("graph.stream error: %s", exc, exc_info=True)
-        await ws.send_text(json.dumps({"type": "error", "message": str(exc)}))
+        try:
+            await ws.send_text(json.dumps({"type": "error", "message": stream_error}))
+        except Exception:
+            pass
 
-    # Final — build record and send done
+    # Final — build record and send done (always, even after error)
     captured = list(get_builder().events)
     record_json = ""
     export_msg = f"{len(captured)} événements capturés"
@@ -154,9 +158,10 @@ async def websocket_run(ws: WebSocket):
         "files": files,
         "export_msg": export_msg,
     }
-    log.info("DONE payload keys: %s  sizes: events=%d mermaid=%d record=%d",
-             list(done_payload.keys()), len(done_payload["events"]),
-             len(done_payload["mermaid"]), len(done_payload["record_json"]))
-    await ws.send_text(json.dumps(done_payload))
-
-    await ws.close()
+    try:
+        await ws.send_text(json.dumps(done_payload))
+        log.info("DONE sent — events=%d mermaid=%d record=%d",
+                 len(done_payload["events"]), len(done_payload["mermaid"]),
+                 len(done_payload["record_json"]))
+    except Exception as exc:
+        log.error("Failed to send DONE: %s", exc)
