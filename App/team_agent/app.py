@@ -349,8 +349,8 @@ with tab_record:
             tok = st.session_state.last_tokens
             st.metric("Tokens totaux", f"{tok['total']:,}")
         with col4:
-            vcs = record_dict.get("vcs", {})
-            rev = vcs.get("revision", "—")
+            git = record_dict.get("git") or {}
+            rev = git.get("revision", "—")
             st.metric("Git SHA", rev[:12] if rev != "—" else "—")
 
         st.divider()
