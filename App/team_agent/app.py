@@ -114,8 +114,8 @@ with tab_chat:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    prompt = st.chat_input("Describe the task for the team…")
-    if prompt:
+    prompt = st.chat_input("Describe the task for the team…", key="user_prompt_input")
+    if prompt and prompt != st.session_state.get("last_task"):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
@@ -257,8 +257,12 @@ with tab_chat:
             json_path = save_json(record, trace_dir / f"{short_id}_trace.json")
             md_path = save_markdown(record, get_builder().events, trace_dir / f"{short_id}_trace.md", task=prompt)
             _export_msg = f"Trace saved → `{json_path.name}` + `{md_path.name}`"
+            st.session_state.trace_saved = True
         except Exception as exc:
-            _export_msg = f"Trace export failed: {exc}"
+            _export_msg = f"❌ Trace export failed: {exc}"
+            st.error(f"Erreur lors de l'export du trace: {exc}")
+            import traceback
+            traceback.print_exc()
 
         # ── Final diagram ──────────────────────────────────────────────────
         _render_live_diagram()
@@ -278,11 +282,14 @@ with tab_chat:
 
 with tab_diagram:
     st.subheader("Sequence Diagram")
-
-    events = st.session_state.last_events
-    if not events:
+    
+    # Debug: afficher l'état de la session
+    if not st.session_state.last_events:
+        st.warning(f"⚠️ Pas d'événements capturés. État de la session: {bool(st.session_state.last_events)} événements")
         st.info("Lancez une tâche dans l'onglet Chat pour voir le diagramme.")
     else:
+        st.success(f"✅ {len(st.session_state.last_events)} événements capturés")
+        events = st.session_state.last_events
         mermaid_str = events_to_mermaid(events)
 
         # Download button
