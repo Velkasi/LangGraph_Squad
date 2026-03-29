@@ -17,8 +17,54 @@ _MAX_MSG_CHARS = 6_000    # ~1.5K tokens par message
 _MAX_HISTORY_MESSAGES = 4
 _MAX_TOOL_RESULT_CHARS = 2_000  # tool results tronqués plus agressivement
 
-_last_call_time: dict[str, float] = {}  # clé → timestamp dernier appel
-_MIN_CALL_INTERVAL = 6.0  # 6s entre chaque appel = ~10 appels/min ≤ 30K TPM Cerebras
+_last_call_time: dict[str, float] = {}  # api_key → timestamp dernier appel
+
+# Cerebras TPM limits per model (tokens/minute, sliding window)
+_CEREBRAS_TPM: dict[str, int] = {
+    "llama3.1-8b":                    60_000,
+    "qwen-3-235b-a22b-instruct-2507": 30_000,
+}
+_CEREBRAS_RPM = 30  # shared across all models on the same key
+
+# Token usage sliding window: api_key → list of (timestamp, tokens_used)
+_token_window: dict[str, list[tuple[float, int]]] = {}
+
+
+def _tpm_wait(api_key: str, model: str, estimated_tokens: int) -> float:
+    """Return seconds to wait before next call to stay within TPM + RPM limits.
+
+    Uses a 60-second sliding window of recent token usage.
+    """
+    tpm_limit = _CEREBRAS_TPM.get(model, 30_000)
+    window = _token_window.setdefault(api_key, [])
+    now = time.monotonic()
+
+    # Drop entries older than 60s
+    window[:] = [(t, tok) for t, tok in window if now - t < 60.0]
+
+    tokens_in_window = sum(tok for _, tok in window)
+
+    # How many tokens remain before hitting TPM?
+    remaining_tpm = tpm_limit - tokens_in_window
+
+    wait_tpm = 0.0
+    if remaining_tpm < estimated_tokens and window:
+        # Wait until the oldest entry leaves the 60s window
+        oldest_ts = window[0][0]
+        wait_tpm = max(0.0, 60.0 - (now - oldest_ts) + 0.5)
+
+    # RPM throttle: min 2s between calls (30 RPM → 1 per 2s, 10% margin)
+    last = _last_call_time.get(api_key, 0.0)
+    wait_rpm = max(0.0, 2.2 - (now - last))
+
+    return max(wait_tpm, wait_rpm)
+
+
+def _record_tokens(api_key: str, tokens_used: int) -> None:
+    """Record token usage for the sliding window after a successful call."""
+    window = _token_window.setdefault(api_key, [])
+    window.append((time.monotonic(), tokens_used))
+    _last_call_time[api_key] = time.monotonic()
 
 
 def _get_api_keys() -> list[str]:
@@ -63,15 +109,30 @@ def _build_llm(model: str, provider: str, tools: list, api_key: str):
         return init_chat_model(model, model_provider=provider, max_retries=0).bind_tools(tools)
 
 
-def _throttled_invoke(llm, messages: list, api_key: str):
-    """Appelle llm.invoke() en respectant _MIN_CALL_INTERVAL par clé."""
-    now = time.monotonic()
-    last = _last_call_time.get(api_key, 0.0)
-    wait = _MIN_CALL_INTERVAL - (now - last)
+def _throttled_invoke(llm, messages: list, api_key: str, model: str = ""):
+    """Appelle llm.invoke() en respectant TPM + RPM Cerebras via fenêtre glissante."""
+    # Estimate tokens for the outgoing request (~1 token per 4 chars)
+    total_chars = sum(
+        len(m.content) if isinstance(m.content, str) else 0
+        for m in messages
+    )
+    estimated_tokens = max(500, total_chars // 4)
+
+    wait = _tpm_wait(api_key, model, estimated_tokens)
     if wait > 0:
+        logger.info("TPM/RPM throttle → attente %.1fs (modèle=%s)", wait, model)
         time.sleep(wait)
+
     result = llm.invoke(messages)
-    _last_call_time[api_key] = time.monotonic()
+
+    # Record actual tokens used (or fall back to estimate)
+    usage = getattr(result, "usage_metadata", None)
+    actual = 0
+    if usage:
+        actual = (getattr(usage, "total_tokens", None) or
+                  (getattr(usage, "input_tokens", 0) + getattr(usage, "output_tokens", 0)))
+    _record_tokens(api_key, actual or estimated_tokens)
+
     return result
 
 
@@ -230,15 +291,18 @@ def run_tool_loop(
         n_slots = len(or_models) if or_models else (len(api_keys) or 1)
         for attempt in range(n_slots * 2):
             try:
-                response = _throttled_invoke(llm, trimmed, current_key)
+                response = _throttled_invoke(llm, trimmed, current_key, current_model)
                 last_exc = None
                 break
             except Exception as exc:
                 last_exc = exc
                 if _is_tpm_minute(exc) or (_is_rpm_exceeded(exc) and _is_cerebras(provider)):
-                    # Cerebras : tout 429 → attendre 65s (TPM ou RPM, même traitement)
+                    # Cerebras 429 → vider la fenêtre glissante + attendre 65s
                     wait = 65
-                    logger.info("Cerebras 429 → attente %ds", wait)
+                    logger.info("Cerebras 429 → attente %ds + reset fenêtre tokens", wait)
+                    # Marquer toute la fenêtre comme "pleine" pour forcer un wait long au prochain appel
+                    tpm_limit = _CEREBRAS_TPM.get(current_model, 30_000)
+                    _token_window[current_key] = [(time.monotonic(), tpm_limit)]
                     time.sleep(wait)
                     _last_call_time[current_key] = time.monotonic()
                 elif _is_rpm_exceeded(exc):

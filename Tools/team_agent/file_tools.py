@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-import os
+import threading
 from pathlib import Path
 
 from langchain_core.tools import tool
@@ -11,13 +11,26 @@ from Config.team_agent.config import WORKSPACE_DIR
 
 logger = logging.getLogger(__name__)
 
-_WORKSPACE = Path(WORKSPACE_DIR).resolve()
+# Thread-local workspace: allows server to override per-run without a global mutation
+_local = threading.local()
+
+
+def get_workspace() -> Path:
+    """Return the workspace for the current thread (falls back to config default)."""
+    ws = getattr(_local, "workspace", None)
+    return Path(ws).resolve() if ws else Path(WORKSPACE_DIR).resolve()
+
+
+def set_workspace(path: str | Path) -> None:
+    """Set the workspace for the current thread (called once per run by the server)."""
+    _local.workspace = str(path)
 
 
 def _safe_path(relative_path: str) -> Path:
-    """Resolve a relative path inside WORKSPACE_DIR and guard against path traversal."""
-    resolved = (_WORKSPACE / relative_path).resolve()
-    if not str(resolved).startswith(str(_WORKSPACE)):
+    """Resolve a relative path inside the current workspace and guard against path traversal."""
+    workspace = get_workspace()
+    resolved = (workspace / relative_path).resolve()
+    if not str(resolved).startswith(str(workspace)):
         raise ValueError(f"Path traversal attempt blocked: {relative_path}")
     return resolved
 

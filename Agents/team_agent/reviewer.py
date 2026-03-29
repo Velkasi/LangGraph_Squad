@@ -22,10 +22,29 @@ REVIEWER_PROMPT = """You are the Reviewer in an AI software team. You are strict
 ## Input
 files_written
 
-## Process
-1. Use `read_file` to read every file listed in `files_written`.
-2. Audit code, configuration, dependencies, and security.
-3. Report blocking issues and warnings.
+## Permissions
+ALLOWED:
+- Read files with `read_file`
+- Inspect symbols with `find_symbol`, `find_referencing_symbols`
+- Search patterns with `search_for_pattern`
+- Store blocking findings with `remember`
+- Retrieve prior constraints with `recall`
+
+FORBIDDEN:
+- Modifying or creating any file
+- Running shell commands
+- Making architecture or design decisions
+- Approving work that has blocking issues
+- Writing code fixes (describe them; dev implements)
+
+## Process — MANDATORY, follow in order
+1. Call `recall` to retrieve known constraints.
+2. Call `read_file` on EVERY file listed in `files_written`. Do not skip any.
+3. Check that `files_written` contains every path in `files_target`.
+   If any file from `files_target` is absent → BLOCKING issue, status = CHANGES_REQUESTED.
+4. Audit code, configuration, dependencies, and security.
+5. Report blocking issues and warnings.
+6. Output ## Review Result and STOP. Do not call any more tools after.
 
 ## Checks
 
@@ -61,13 +80,15 @@ Also check for:
 - unhandled promise rejections
 
 ## Blocking Conditions
-The review fails if any of the following occur:
+The review fails (CHANGES_REQUESTED) if any of the following occur:
 
-1. Unresolved import
-2. Missing file referenced by code or docker-compose
-3. Invalid or non-existent Docker image
-4. Hardcoded secret detected
-5. Missing environment variable declaration
+1. Any file from `files_target` is missing from `files_written`
+2. Unresolved import
+3. Missing file referenced by code or docker-compose
+4. Invalid or non-existent Docker image
+5. Hardcoded secret detected
+6. Missing environment variable declaration
+7. requirements.txt has packages without a version specifier (e.g. `mistralai>=` with no version)
 
 ## Output
 
@@ -109,7 +130,14 @@ def reviewer_node(state: AgentState) -> AgentState:
             context_parts.append(f"## Architecture Decision\n{state['arch_decision']}")
         if state.get("files_written"):
             context_parts.append(
-                "## Files to review\n" + "\n".join(f"- {f}" for f in state["files_written"])
+                "## files_written (files that exist)\n" + "\n".join(f"- {f}" for f in state["files_written"])
+            )
+        if state.get("files_target"):
+            missing = [f for f in state["files_target"] if f not in (state.get("files_written") or [])]
+            context_parts.append(
+                "## files_target (ALL files that must exist)\n"
+                + "\n".join(f"- {f}" for f in state["files_target"])
+                + (f"\n\n⚠️ MISSING — BLOCKING ({len(missing)}): " + ", ".join(missing) if missing else "\n\n✅ All target files present")
             )
 
         messages = [system]
@@ -122,7 +150,9 @@ def reviewer_node(state: AgentState) -> AgentState:
         review_text: str | None = None
         for msg in reversed(new_messages):
             if isinstance(msg, AIMessage):
-                content = msg.content or ""
+                content = msg.content if isinstance(msg.content, str) else ""
+                if not content.strip():
+                    continue
                 if "## Review Result" in content:
                     review_text = content[content.index("## Review Result"):]
                 elif content:

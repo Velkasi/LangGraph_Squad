@@ -22,6 +22,9 @@ class AgentState(TypedDict):
     # Paths of every file written during the current run
     files_written: list[str]
 
+    # Target file list extracted from the plan (all files that must be produced)
+    files_target: Optional[list[str]]
+
     # When True the graph pauses and waits for human approval
     awaiting_human: bool
 
@@ -35,4 +38,5 @@ class AgentState(TypedDict):
     test_result: Optional[str]    # set by test agent
     writeup_done: Optional[bool]  # set by writeup agent
     dev_attempts: Optional[int]   # nombre de passages dans dev sans écriture
+    debug_attempts: Optional[int] # nombre de passages dans debug sans résolution
     token_usage: Optional[dict]   # {"prompt_tokens": int, "completion_tokens": int, "total_tokens": int}

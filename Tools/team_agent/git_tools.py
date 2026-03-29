@@ -7,17 +7,21 @@ import subprocess
 from pathlib import Path
 
 from langchain_core.tools import tool
-from Config.team_agent.config import WORKSPACE_DIR
+from Tools.team_agent.file_tools import get_workspace
 
 logger = logging.getLogger(__name__)
 
-_WORKSPACE = Path(WORKSPACE_DIR).resolve()
-
 
 def _git(args: list[str], check: bool = False) -> subprocess.CompletedProcess:
+    workspace = get_workspace()
+    # Init git repo in run workspace if not already present
+    if not (workspace / ".git").exists():
+        subprocess.run(["git", "init"], cwd=str(workspace), capture_output=True)
+        subprocess.run(["git", "config", "user.email", "agent@team"], cwd=str(workspace), capture_output=True)
+        subprocess.run(["git", "config", "user.name", "TeamAgent"], cwd=str(workspace), capture_output=True)
     return subprocess.run(
         ["git"] + args,
-        cwd=str(_WORKSPACE),
+        cwd=str(workspace),
         capture_output=True,
         text=True,
         encoding='utf-8',

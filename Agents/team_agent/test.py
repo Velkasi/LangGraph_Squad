@@ -15,76 +15,62 @@ TEST_TOOLS = [run_shell, read_file]
 
 TEST_PROMPT = """You are the Tester in an AI software team.
 
-You have access to a Docker daemon. Execute all steps in order.
+## Permissions
+ALLOWED:
+- Read files with `read_file` — read each file ONCE, then move on
+- Run shell commands with `run_shell` for: syntax checks, import checks, docker compose
 
-Stop immediately on failure, except for Step 8 which must always run.
+FORBIDDEN:
+- Re-reading a file you have already read in this session
+- Modifying or creating any source file
+- Running destructive commands (rm -rf, DROP TABLE, git reset, etc.)
+- Committing code
+- Calling memory tools
 
-## Step 1 — Static file checks
-- Use `read_file` on every file in `files_written`.
-- Verify each file is non-empty and plausible.
-- Read `docker-compose.yml`.
-- For each service with `build:`, confirm its Dockerfile exists using `read_file`.
-- Verify every local `import` or `require` in JS/TS files resolves to an existing file.
+## STRICT execution order — follow these steps IN ORDER, do not repeat any step
 
-If any file or dependency is missing → FAIL.
+### Step 1 — Read all files (ONCE each, never twice)
+Call `read_file` for every file in `files_written`. Each file exactly once.
+After reading all files → go immediately to Step 2. Do NOT call `read_file` again.
 
-## Step 2 — Compose validation
-run_shell:
-docker compose config
+### Step 2 — Check files_target completeness
+Compare `files_written` with `files_target` (if provided).
+If files in `files_target` are missing from `files_written` → FAIL immediately with:
+  "Missing files: <list>"
+Do not proceed further if files are missing.
 
-## Step 3 — Docker build
-run_shell:
-docker compose build --no-cache 2>&1
+### Step 3 — Syntax check (Python: always; JS/TS: if applicable)
+For each .py file in `files_written`:
+  run_shell: python -m py_compile <path>
+For JS/TS: run_shell: npx tsc --noEmit
 
-## Step 4 — Start containers
-run_shell:
-docker compose up -d 2>&1
+### Step 4 — Docker validation (ONLY if docker-compose.yml is in files_written)
+run_shell: docker compose config
+run_shell: docker compose build --no-cache 2>&1
+run_shell: docker compose up -d 2>&1 && sleep 10 && docker compose ps
+run_shell: docker compose logs --tail=30 2>&1
+run_shell: docker compose down 2>&1
 
-run_shell:
-sleep 10 && docker compose ps
+### Step 5 — Write ## Test Result and STOP
+After completing Steps 1-4, output the result section and stop immediately.
+Do NOT call any more tools after writing the result.
 
-All services must show `running` or `healthy`.
-
-## Step 5 — Logs check
-run_shell:
-docker compose logs --tail=30 2>&1
-
-Fail if containers exited or show fatal errors.
-
-## Step 6 — Database connectivity
-run_shell:
-docker compose exec backend node -e "const { Client } = require('pg'); const c = new Client({ connectionString: process.env.SUPABASE_DB_URL }); c.connect().then(() => { console.log('DB OK'); c.end(); }).catch(e => { console.error('DB FAIL', e.message); process.exit(1); })"
-
-Fail if connection fails.
-
-## Step 7 — HTTP endpoint check
-run_shell:
-docker compose exec backend curl -sf http://localhost:3000/api/public
-
-Fail if request fails.
-
-## Step 8 — Teardown (always run)
-run_shell:
-docker compose down 2>&1
-
-## Output
+## Output — REQUIRED
 
 ## Test Result
 **Status:** PASSED | FAILED
 
-**Steps passed:** 1,2,3...
+**Steps run:** list each step executed
+**Steps skipped:** list each step not applicable with reason
 
 **Failures:**
-- Step N: <exact error>
+- Step N: <exact error message>
 
 ## Rules
-- FAIL if any container exits unexpectedly.
-- FAIL if a Dockerfile referenced by `build:` is missing.
-- FAIL if database connection fails.
-- Do not modify code.
-
-## Tools
-run_shell · read_file
+- FAIL if any file in `files_target` is missing from `files_written`.
+- FAIL if py_compile returns an error.
+- PASSED means: all applicable steps succeeded and no files are missing.
+- After writing ## Test Result → output nothing more, call no more tools.
 """
 
 
@@ -94,7 +80,14 @@ def test_node(state: AgentState) -> AgentState:
         context_parts: list[str] = []
         if state.get("files_written"):
             context_parts.append(
-                "## Files to test\n" + "\n".join(f"- {f}" for f in state["files_written"])
+                "## files_written (files that exist)\n" + "\n".join(f"- {f}" for f in state["files_written"])
+            )
+        if state.get("files_target"):
+            missing = [f for f in state["files_target"] if f not in (state.get("files_written") or [])]
+            context_parts.append(
+                "## files_target (ALL files that must exist)\n"
+                + "\n".join(f"- {f}" for f in state["files_target"])
+                + (f"\n\n⚠️ MISSING ({len(missing)}): " + ", ".join(missing) if missing else "\n\n✅ All target files present")
             )
 
         messages = [system]
@@ -107,12 +100,15 @@ def test_node(state: AgentState) -> AgentState:
         test_text: str | None = None
         for msg in reversed(new_messages):
             if isinstance(msg, AIMessage):
-                content = msg.content or ""
+                content = msg.content if isinstance(msg.content, str) else ""
+                if not content.strip():
+                    continue
                 if "## Test Result" in content:
                     test_text = content[content.index("## Test Result"):]
-                elif content:
+                    break
+                if content:
                     test_text = content
-                break
+                    break
 
         return {
             "messages": new_messages,

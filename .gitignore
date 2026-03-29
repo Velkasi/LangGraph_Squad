@@ -1,9 +1,10 @@
 .venv
 .env
 .claude
-.workspace
+.workspace/
 .Premier_Build_5sur10/
 .prompt_kine.md
+.workspace_anthropic/
 __pycache__/
 *.pyc
 *.pyo

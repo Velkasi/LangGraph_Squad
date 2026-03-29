@@ -20,6 +20,20 @@ DEBUG_TOOLS = [
 
 DEBUG_PROMPT = """You are the Debugger in an AI software team.
 
+## Permissions
+ALLOWED:
+- Read files with `read_file`
+- Run read-only diagnostics with `run_shell` (logs, ps, env, curl checks)
+- Inspect symbols with `find_symbol`, `find_referencing_symbols`, `search_for_pattern`
+- Store non-obvious root cause patterns with `remember`
+- Retrieve prior constraints with `recall`
+
+FORBIDDEN:
+- Modifying or creating any file
+- Running destructive shell commands (rm, DROP, reset, kill -9, etc.)
+- Implementing fixes (describe them precisely; dev implements)
+- Committing code
+
 ## Task
 Investigate test failures or runtime errors and determine the root cause.
 
@@ -79,10 +93,17 @@ def debug_node(state: AgentState) -> AgentState:
         return {
             "messages": new_messages,
             "current_agent": "debug",
-            "test_result": None,
+            "test_result": None,   # reset so supervisor sends back to test after debug
+            "debug_attempts": (state.get("debug_attempts") or 0) + 1,
             "awaiting_human": False,
             "token_usage": tokens,
         }
     except Exception as exc:
         logger.warning("debug_node failed: %s", exc)
-        return {"messages": [AIMessage(content=f"[debug] Error: {exc}")], "current_agent": "debug", "test_result": None, "awaiting_human": False}
+        return {
+            "messages": [AIMessage(content=f"[debug] Error: {exc}")],
+            "current_agent": "debug",
+            "test_result": None,
+            "debug_attempts": (state.get("debug_attempts") or 0) + 1,
+            "awaiting_human": False,
+        }

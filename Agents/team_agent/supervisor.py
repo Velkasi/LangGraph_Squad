@@ -21,11 +21,14 @@ def supervisor_node(state: AgentState) -> dict:
     review       = state.get("review_result")
     test_result  = state.get("test_result")
     files        = state.get("files_written") or []
-    writeup_done = state.get("writeup_done") or False
-    dev_attempts = state.get("dev_attempts") or 0
+    # Only count actual code files, not architecture docs written by the architect
+    code_files   = [f for f in files if not f.endswith(".md")]
+    writeup_done  = state.get("writeup_done") or False
+    dev_attempts  = state.get("dev_attempts") or 0
+    debug_attempts = state.get("debug_attempts") or 0
 
-    logger.info("Supervisor state — plan=%r arch=%r files=%r test=%r review=%r writeup=%r dev_attempts=%s",
-                bool(plan), bool(arch), len(files), test_result, bool(review), writeup_done, dev_attempts)
+    logger.info("Supervisor state — plan=%r arch=%r files=%r code_files=%r test=%r review=%r writeup=%r dev_attempts=%s debug_attempts=%s",
+                bool(plan), bool(arch), len(files), len(code_files), test_result, bool(review), writeup_done, dev_attempts, debug_attempts)
 
     if plan is None:
         next_agent = "planner"
@@ -33,18 +36,21 @@ def supervisor_node(state: AgentState) -> dict:
     elif arch is None:
         next_agent = "architect"
         reason     = "plan exists, no architecture decision yet"
-    elif len(files) == 0 and (dev_attempts or 0) >= 3:
+    elif len(code_files) == 0 and (dev_attempts or 0) >= 3:
         next_agent = "END"
-        reason     = "dev failed 3 times without writing files — aborting"
-    elif len(files) == 0:
+        reason     = "dev failed 3 times without writing code files — aborting"
+    elif len(code_files) == 0:
         next_agent = "dev"
         reason     = f"architecture ready, no code written yet (attempt {(dev_attempts or 0) + 1})"
     elif test_result is None:
         next_agent = "test"
         reason     = "code written, not tested yet"
+    elif "FAIL" in (test_result or "").upper() and debug_attempts >= 3:
+        next_agent = "END"
+        reason     = "debug failed 3 times without fixing tests — aborting"
     elif "FAIL" in (test_result or "").upper():
         next_agent = "debug"
-        reason     = "tests failed"
+        reason     = f"tests failed (debug attempt {debug_attempts + 1})"
     elif review is None:
         next_agent = "reviewer"
         reason     = "tests pass, no review yet"

@@ -1,0 +1,1 @@
+# Changelog\n\n## v1.0.0 (Initial Release)\n* Implemented document processing pipeline with image transcription and text storage in ChromaDB.\n

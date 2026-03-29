@@ -34,6 +34,8 @@ const ICONS: Record<string, string> = {
   debug: '🐛', reviewer: '🔍', writeup: '📝', analyst: '📊', supervisor: '🎯',
 }
 
+const ALL_AGENTS = ['supervisor', 'planner', 'architect', 'dev', 'test', 'debug', 'reviewer', 'writeup', 'analyst']
+
 const KIND_ICONS: Record<string, string> = {
   llm_call: '🔵', llm_response: '🟢', tool_call: '🟡', tool_result: '🟠',
   memory_op: '🟣', supervisor_route: '🎯', agent_start: '▶', agent_done: '✅', error: '❌',
@@ -148,7 +150,37 @@ export default function App() {
 
     ws.onmessage = (evt) => {
       const msg = JSON.parse(evt.data as string)
-      console.log('[WS]', msg.type, msg)
+      if (msg.type !== 'ping') console.log('[WS]', msg.type, msg)
+
+      if (msg.type === 'ping') return  // keepalive, ignore
+
+      if (msg.type === 'live_event') {
+        // Individual tracer event pushed mid-agent — update Event Log live
+        const ev = msg.event as TraceEvent
+        setCurrentNode(ev.agent)
+        setRunState(prev => {
+          const events = [...(prev?.events ?? []), ev]
+          return {
+            events,
+            mermaid: prev?.mermaid ?? '',
+            recordJson: prev?.recordJson ?? '',
+            messages: prev?.messages ?? [],
+            files: prev?.files ?? [],
+            tokens: liveTokensRef.current,
+            exportMsg: prev?.exportMsg ?? '',
+          }
+        })
+        // Update live token count from llm_call events
+        if (ev.kind === 'llm_call') {
+          const p = ev.payload
+          setLiveTokens(prev => ({
+            prompt:     prev.prompt     + (Number(p.prompt_tokens)     || 0),
+            completion: prev.completion + (Number(p.completion_tokens) || 0),
+            total:      prev.total      + (Number(p.total_tokens)      || 0),
+          }))
+        }
+        return
+      }
 
       if (msg.type === 'step') {
         setCurrentNode(msg.node)
@@ -221,7 +253,9 @@ export default function App() {
 
   // ── Derived for log tab ────────────────────────────────────────────────────
   const allEvents = runState?.events ?? []
-  const allAgents = [...new Set(allEvents.map(e => e.agent))]
+  // Always show all known agents in filter, highlight those present in this run
+  const activeInRun = new Set(allEvents.map(e => e.agent))
+  const allAgents = ALL_AGENTS
   const allKinds  = [...new Set(allEvents.map(e => e.kind))]
   const activeAgents = filterAgents.length > 0 ? filterAgents : allAgents
   const activeKinds  = filterKinds.length  > 0 ? filterKinds  : allKinds
@@ -431,15 +465,24 @@ export default function App() {
                     <div>
                       <div className="text-xs text-gray-500 mb-1">Agents</div>
                       <div className="flex gap-2 flex-wrap">
-                        {allAgents.map(a => (
-                          <button key={a}
-                            onClick={() => setFilterAgents(prev => prev.includes(a) ? prev.filter(x => x !== a) : [...prev, a])}
-                            className={`text-xs px-2 py-1 rounded border transition-colors ${
-                              activeAgents.includes(a) ? 'border-purple-500 text-purple-400 bg-purple-950' : 'border-gray-700 text-gray-600'
-                            }`}>
-                            {ICONS[a] ?? ''} {a}
-                          </button>
-                        ))}
+                        {allAgents.map(a => {
+                          const wasActive = activeInRun.has(a)
+                          const isSelected = activeAgents.includes(a)
+                          return (
+                            <button key={a}
+                              onClick={() => wasActive && setFilterAgents(prev => prev.includes(a) ? prev.filter(x => x !== a) : [...prev, a])}
+                              title={wasActive ? `Filter: ${a}` : `${a} not called in this run`}
+                              className={`text-xs px-2 py-1 rounded border transition-colors ${
+                                !wasActive
+                                  ? 'border-gray-800 text-gray-700 cursor-default opacity-40'
+                                  : isSelected
+                                    ? 'border-purple-500 text-purple-400 bg-purple-950'
+                                    : 'border-gray-700 text-gray-600'
+                              }`}>
+                              {ICONS[a] ?? ''} {a}
+                            </button>
+                          )
+                        })}
                       </div>
                     </div>
                     <div>

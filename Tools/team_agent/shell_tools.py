@@ -7,11 +7,10 @@ import subprocess
 from pathlib import Path
 
 from langchain_core.tools import tool
-from Config.team_agent.config import SHELL_TIMEOUT_SECONDS, WORKSPACE_DIR
+from Config.team_agent.config import SHELL_TIMEOUT_SECONDS
+from Tools.team_agent.file_tools import get_workspace
 
 logger = logging.getLogger(__name__)
-
-_WORKSPACE = Path(WORKSPACE_DIR).resolve()
 
 # Commands that are never allowed regardless of context
 _BLOCKED_PREFIXES = ("rm -rf", "rmdir /s", "shutdown", "reboot", "mkfs", "dd if=")
@@ -36,11 +35,12 @@ def run_shell(command: str) -> str:
         logger.warning("run_shell blocked dangerous command: %s", command)
         return f"Error: command blocked for safety reasons — {command}"
     try:
-        _WORKSPACE.mkdir(parents=True, exist_ok=True)
+        workspace = get_workspace()
+        workspace.mkdir(parents=True, exist_ok=True)
         result = subprocess.run(
             command,
             shell=True,
-            cwd=str(_WORKSPACE),
+            cwd=str(workspace),
             capture_output=True,
             text=False,
             timeout=SHELL_TIMEOUT_SECONDS,
